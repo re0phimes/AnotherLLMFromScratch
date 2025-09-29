@@ -1,0 +1,2 @@
+# AnotherLLMFromScratch
+从0构建一个分布式大模型训练
