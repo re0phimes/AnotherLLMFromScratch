@@ -1,0 +1,63 @@
+# GPT-1B 模型配置文件
+# 约1B参数的GPT模型，适合多卡训练
+# 详细参数说明请参考 gpt_125m.yaml
+
+# 基本信息
+model_type: "gpt"
+model_name: "gpt_1b"
+
+# 核心架构参数
+n_layer: 24
+n_head: 16  
+n_embd: 1600
+vocab_size: 50257
+block_size: 2048
+
+# 模型架构配置
+bias: true
+dropout: 0.1
+attention_type: "causal_self_attention"
+use_flash_attention: true
+
+# 嵌入配置
+tie_word_embeddings: true
+position_embedding_type: "learned"
+
+# 长度外推配置
+enable_length_extrapolation: true
+extrapolation_method: "linear"
+rope_scaling_factor: 1.0
+rope_theta: 10000.0
+max_extrapolation_length: 8192
+extrapolation_alpha: 1.0
+
+# 初始化参数
+initializer_range: 0.02
+layer_norm_epsilon: 1e-5
+
+# 训练优化
+torch_dtype: "float32"
+gradient_checkpointing: true  # 启用以节省显存
+use_cache: true
+
+# Token配置
+pad_token_id: 50256
+eos_token_id: 50256
+bos_token_id: 50256
+
+# 模型规模信息
+estimated_parameters: 1024000000
+memory_footprint_mb: 4096
+flops_per_token: 2048000000
+
+# 兼容性字段
+hidden_size: 1600
+intermediate_size: 6400  # 4 * n_embd
+max_position_embeddings: 2048
+num_attention_heads: 16
+num_hidden_layers: 24
+
+# 输出控制
+use_return_dict: true
+output_attentions: false
+output_hidden_states: false
