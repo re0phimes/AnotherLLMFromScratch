@@ -214,3 +214,72 @@ logger.warning("注意事项")
 ```
 
 已添加loguru>=0.7.0到pyproject.toml依赖中。
+
+### ✅ 已完成：src/utils/distributed.py
+**分布式训练工具模块特性：**
+- 自动检测torchrun环境变量
+- 智能初始化分布式进程组（NCCL/GLOO）
+- 完整的分布式通信工具集
+- 设备管理和进程同步
+- 错误处理和优雅降级
+
+**核心功能：**
+1. **环境检测**: `is_distributed()`, `get_rank()`, `get_world_size()`等
+2. **初始化管理**: `setup_distributed()`, `cleanup_distributed()`
+3. **通信原语**: `barrier()`, `reduce_tensor()`, `gather_tensor()`, `broadcast_tensor()`
+4. **设备管理**: `get_device()` 自动分配GPU设备
+5. **调试工具**: `print_distributed_info()` 打印详细的分布式信息
+
+**使用方式：**
+```python
+from utils.distributed import setup_distributed, is_main_process, get_device
+
+# 初始化分布式环境
+rank, local_rank, world_size = setup_distributed()
+
+# 获取设备
+device = get_device()  # "cuda:0", "cuda:1"等
+
+# 主进程执行特定操作
+if is_main_process():
+    logger.info("只有主进程会打印这条信息")
+```
+
+现在utils模块的核心工具已完成，为后续模块提供了日志和分布式支持。
+
+### 📚 已完成：docs/distributed_training_guide.md
+**分布式训练深度教学文档：**
+- **理论基础**: 分布式训练概念、术语、通信后端详解
+- **标准范式**: PyTorch分布式训练的6步标准流程
+- **架构设计**: 4层分层架构模式详解
+- **设计哲学**: 单一职责、优雅降级、错误容忍原则
+- **实际应用**: 完整的训练脚本使用示例
+- **问题解决**: 常见分布式问题的诊断和解决方案
+
+**核心设计模式：**
+1. **分层架构**: 环境感知→生命周期管理→通信原语→便利工具
+2. **优雅降级**: 单进程→依赖缺失→未初始化→正常分布式
+3. **单一职责**: 每个函数只做一件事，便于测试和组合
+4. **接口一致**: 同一套API适用于单卡和多卡场景
+
+这个教学文档深入解析了distributed.py的设计思想，展示了现代分布式训练框架的标准范式。
+
+### 📚 已完成：docs/distributed_communication_guide.md
+**分布式通信原语详细教学：**
+针对你的问题，专门创建了通信函数的详细解析文档：
+
+**核心通信原语详解：**
+1. **reduce_tensor**: 数据聚合 - 将所有GPU的数据求和/平均，用于梯度同步和指标计算
+2. **gather_tensor**: 数据收集 - 将所有GPU的数据收集到主进程，用于验证评估和结果保存  
+3. **broadcast_tensor**: 数据广播 - 将主进程的数据复制到所有GPU，用于参数同步和配置更新
+4. **barrier**: 进程同步 - 同步点，确保所有进程完成某个阶段后再继续
+
+**详细内容包括：**
+- 每个函数的工作原理和数据流向图解
+- 具体的4GPU示例展示输入输出变化
+- 实际应用场景：梯度同步、验证评估、参数广播、检查点保存等
+- 完整的代码示例：训练循环、评估流程、动态配置等
+- 性能优化建议：批量通信、异步操作、频率控制
+- 调试技巧和常见问题解决
+
+现在对这些通信原语的作用和使用场景应该非常清楚了！
