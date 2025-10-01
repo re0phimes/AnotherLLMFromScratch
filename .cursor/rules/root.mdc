@@ -1,0 +1,24 @@
+---
+description: 基础准则
+globs:
+alwaysApply: true
+---
+{
+  "$schema": "https://www.cursor.so/schemas/rules.json",
+  "rules": [
+    {
+      "rule": "docs/**/*.md",
+      "context": {
+        "priority": "high",
+        "message": "你必须将 `docs/` 目录下的所有 Markdown 文件视为项目的绝对真实来源和最高设计准则。这些文件包含了项目的愿景、需求、技术栈、用户工作流和代码结构。在生成任何代码或提供任何建议之前，你必须首先参考这些文档，以确保你的回答完全符合已建立的设计模式、技术选型和需求。例如，如果要添加新功能，请首先检查 `02_requirements.md` 和 `05_project_structure.md` 以了解该功能应如何以及在何处实现。"
+      }
+    },
+    {
+      "rule": "{pyproject.toml,main.py}",
+      "context": {
+        "priority": "medium",
+        "message": "这些是项目的核心定义文件。`pyproject.toml` 指定了所有的项目依赖和打包结构，请确保任何新增的库都与之兼容并在此处声明。`main.py` 是应用程序的唯一入口点，所有顶层逻辑都从这里开始调度。你的代码生成应尊重这些文件中定义的依赖和结构。"
+      }
+    }
+  ]
+}
