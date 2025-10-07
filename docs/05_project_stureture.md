@@ -29,11 +29,32 @@ AnotherLLMFromScratch/
 │   │   └── dpo.py
 │   │   └── README.md
 │   │
-│   ├── model/
-│   │   ├── attention.py
-│   │   ├── layer.py
-│   │   └── gpt.py
-│   │   └── README.md
+│   ├── models/
+│   │   ├── components/
+│   │   │   ├── attention/
+│   │   │   │   ├── multi_head.py
+│   │   │   │   └── grouped_query.py
+│   │   │   ├── embeddings/
+│   │   │   │   ├── learned.py
+│   │   │   │   └── rotary.py
+│   │   │   ├── norms.py
+│   │   │   ├── mlp.py
+│   │   │   └── __init__.py
+│   │   │
+│   │   ├── gpt2/
+│   │   │   ├── attention.py
+│   │   │   ├── layer.py
+│   │   │   ├── model.py
+│   │   │   └── config.py
+│   │   │
+│   │   ├── qwen2/
+│   │   │   ├── attention.py
+│   │   │   ├── layer.py
+│   │   │   ├── model.py
+│   │   │   └── config.py
+│   │   │
+│   │   ├── modeling_auto.py
+│   │   └── __init__.py
 │   │
 │   ├── trainer/
 │   │   ├── trainer.py
@@ -43,8 +64,7 @@ AnotherLLMFromScratch/
 │   │
 │   ├── utils/
 │   │   ├── distributed.py
-│   │   ├── logger.py
-│   │   └── misc.py
+│   │   └── logger.py
 │   │   └── README.md
 │   │
 │   ├── train_pretrain.py
@@ -78,11 +98,43 @@ dataset/README.md:
 要求: 必须解释数据处理模块的设计理念。明确指出此模块负责处理离线（Offline）数据集。对于需要在线数据生成的强化学习任务（如PPO），需说明此模块仅负责提供初始的提示（Prompt）数据源，完整的经验生成逻辑不在此模块范围内。
 pretrain.py, sft.py, dpo.py:
 要求: 必须能够解析 configs/train/*.yaml 中结构化的 data 配置块，并根据 type 字段决定是加载本地文件还是通过相应库（如 datasets）进行流式读取。
-### 3.2.6 src/model/ - 模型定义子系统
-model/README.md:
-要求: 必须解释模型构建的层次化设计思想：attention.py 是核心计算单元，layer.py 将其组装成可复用的Transformer Block，gpt.py 最终将Block堆叠成完整模型。
-layer.py:
-要求: 职责: 实现一个完整的、可复用的Transformer Block。规格: 该模块必须导入并使用 torch.nn.LayerNorm。它负责将 attention.py 提供的自注意力模块、一个前馈网络（MLP）、层归一化和残差连接，按照标准的Pre-Norm结构组装起来。
+### 3.2.6 src/models/ - 模型定义子系统
+models 目录采用“组件库 + 架构实现”双层组织，以满足多模型族的快速组合需求。
+
+models/components/README.md:
+要求: 阐述组件化设计理念，说明注意力、归一化、MLP、嵌入等基础模块可以跨模型族复用，并给出如何在新架构中选型这些组件的指南。
+
+components/attention/
+- multi_head.py: 实现 GPT-2 风格的标准多头注意力，支持因果掩码、Flash Attention 自动回退。
+- grouped_query.py: 实现 GQA/MQA 注意力，集成 RoPE、KV Cache 写入逻辑，供 Qwen2 等现代模型使用。
+
+components/embeddings/
+- learned.py: 可学习的位置编码实现，用于 GPT-2 类模型。
+- rotary.py: RoPE 旋转位置编码实现，包含缓存与 apply 接口，可在生成模式下复用。
+
+components/norms.py:
+提供 LayerNorm、RMSNorm 等规范化层。
+
+components/mlp.py:
+提供标准 GELU MLP、SwiGLU 等前馈网络实现，支持配置宽度系数与激活函数。
+
+models/gpt2/
+- attention.py: 基于 components.attention.multi_head.Wrapper，实现 GPT-2 专用注意力模块（含 Dropout、因果掩码控制）。
+- layer.py: 构建 GPT-2 Transformer Block（Pre-Norm + LayerNorm + GELU MLP + Residual）。
+- model.py: 堆叠 Block，提供完整 GPT-2 like 模型（含嵌入、语言建模头、generate 接口）。
+- config.py: 使用 dataclass/pydantic 定义 GPT-2 配置，含 vocab_size、n_layer、n_head、n_embd、max_position 等属性。
+
+models/qwen2/
+- attention.py: 基于 grouped_query 注意力与 RoPE，支持 KV Cache、动态 position_ids。
+- layer.py: 构建 Qwen2 Transformer Block（RMSNorm、SwiGLU、残差结构、dropout 策略）。
+- model.py: 完整 Qwen2 like 模型，实现高效生成路径、KV Cache 维护。
+- config.py: 定义 Qwen2 配置，涵盖 num_kv_heads、ffn_multiplier、rope_base、rope_scaling、use_sliding_window 等参数。
+
+modeling_auto.py:
+实现自动模型工厂，例如 AutoModelForCausalLM，根据配置中的 model_family 自动导入 gpt2 或 qwen2 的 model.py。
+
+models/__init__.py:
+导出常用模型类、配置类与 Auto 工厂入口。
 ### 3.2.7 src/trainer/ - 训练驱动子系统
 trainer/README.md:
 要求: 必须说明 trainer.py 是驱动所有训练任务的通用引擎，它负责执行训练循环的通用部分（如梯度累积、AMP、DDP封装），而将任务特定的逻辑（如损失计算）委托给模型本身。
