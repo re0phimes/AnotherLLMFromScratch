@@ -5,29 +5,36 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
-from ..components import MultiHeadSelfAttention, MultiHeadAttentionOutput
+from ..components import (
+    GroupedQueryAttention,
+    GroupedQueryAttentionCache,
+    GroupedQueryAttentionOutput,
+)
 
 
-class GPT2Attention(nn.Module):
-    """GPT-2 专用自注意力包装。
-
-    直接复用共享的 MultiHeadSelfAttention，统一 GPT-2 模块内部接口。
-    """
+class Qwen2Attention(nn.Module):
+    """Qwen2 专用注意力包装，基于 GQA + RoPE + KV cache。"""
 
     def __init__(
         self,
         embed_dim: int,
         num_heads: int,
+        num_kv_heads: int,
         *,
+        rope_dim: Optional[int] = None,
+        rope_base: float = 10000.0,
         attn_dropout: float = 0.0,
         resid_dropout: float = 0.0,
         qkv_bias: bool = True,
         use_flash: bool = True,
     ) -> None:
         super().__init__()
-        self.attn = MultiHeadSelfAttention(
+        self.attn = GroupedQueryAttention(
             embed_dim=embed_dim,
             num_heads=num_heads,
+            num_kv_heads=num_kv_heads,
+            rope_dim=rope_dim,
+            rope_base=rope_base,
             attn_dropout=attn_dropout,
             resid_dropout=resid_dropout,
             qkv_bias=qkv_bias,
@@ -39,14 +46,21 @@ class GPT2Attention(nn.Module):
         hidden_states: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
         *,
+        position_ids: Optional[torch.Tensor] = None,
+        past_key_value: Optional[GroupedQueryAttentionCache] = None,
+        use_cache: bool = False,
         need_weights: bool = False,
-    ) -> MultiHeadAttentionOutput:
+    ) -> GroupedQueryAttentionOutput:
         return self.attn(
-            hidden_states=hidden_states,
+            hidden_states,
             attention_mask=attention_mask,
-            is_causal=True,
+            position_ids=position_ids,
+            past_key_value=past_key_value,
+            use_cache=use_cache,
             need_weights=need_weights,
         )
 
 
-__all__ = ["GPT2Attention"]
+__all__ = ["Qwen2Attention"]
+
+
