@@ -1,0 +1,46 @@
+# 预训练任务配置 - 驱动 GPT-2 族模型在无监督语料上的自回归训练
+
+run_name: "pretrain_gpt2_125m"
+seed: 42
+
+model:
+  model_config_path: "/home/modelenv/chentianxuan/projects/llm/AnotherLLMFromScratch/configs/model/gpt_125m.yaml"
+  tokenizer_name_or_path: "gpt2"
+
+optimizer:
+  name: "adamw"
+  lr: 3.0e-4
+  betas: [0.9, 0.95]
+  weight_decay: 0.1
+
+scheduler:
+  name: "cosine"
+  warmup_steps: 2000
+  total_steps: 200000
+
+training:
+  micro_batch_size: 4
+  global_batch_size: 256
+  max_steps: 200000
+  gradient_accumulation: 64
+  precision: "bf16"
+  gradient_checkpointing: false
+  save_interval: 1000
+  log_interval: 100
+
+data:
+  type: "local"
+  path: "/home/modelenv/chentianxuan/projects/llm/AnotherLLMFromScratch/data/openwebtext_subset.jsonl"
+  shuffle: true
+  num_workers: 4
+  prefetch_factor: 2
+  max_samples: null
+
+evaluation:
+  interval: 1000
+  max_new_tokens: 128
+  prompts:
+    - "Today is a beautiful day, because"
+    - "In a shocking finding, scientists discovered"
+    - "Once upon a time"
+

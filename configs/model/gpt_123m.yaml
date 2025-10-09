@@ -1,5 +1,7 @@
+# GPT-123M 模型配置文件 - 面向单卡调试的轻量级 GPT-2 架构
+
 model_family: "gpt2"
-model_name: "gpt_125m"
+model_name: "gpt_123m"
 
 vocab_size: 50257
 n_layer: 12
@@ -14,6 +16,7 @@ activation: "gelu"
 layer_norm_eps: 1e-5
 qkv_bias: true
 use_flash: true
-pad_token_id: 50256
+pad_token_id: null
 output_hidden_states: false
 output_attentions: false
+

@@ -1,0 +1,72 @@
+# 预训练任务配置示例 - 带注释说明每个字段的用途
+
+run_name: "pretrain_gpt2_125m_example"  # 日志与checkpoint前缀，便于区分实验
+seed: 42                                 # 控制随机数以实现可复现性
+
+model:
+  model_config_path: "/home/modelenv/chentianxuan/projects/llm/AnotherLLMFromScratch/configs/model/gpt_125m_example.yaml"
+  # 指向模型结构定义。通过 AutoConfig 读取此 YAML 并实例化 GPT2Config。
+  tokenizer_name_or_path: "gpt2"
+  # 使用 Hugging Face transformers 内置 tokenizer，可换成任意兼容 repo 或本地路径。
+
+optimizer:
+  name: "adamw"                          # 优化器类型（Trainer 中按名称查表构建）
+  lr: 3.0e-4                              # 基础学习率，未做 LR scale 前的值
+  betas: [0.9, 0.95]                      # AdamW 一阶、二阶动量衰减系数
+  weight_decay: 0.1                       # 权重衰减，防止过拟合
+
+scheduler:
+  name: "cosine"                         # 余弦退火学习率调度器
+  warmup_steps: 2000                      # 线性热身步数
+  total_steps: 200000                     # 预计训练总步数，供调度器计算
+
+training:
+  micro_batch_size: 4                     # 单设备单次前向的 batch size
+  global_batch_size: 256                  # 总 batch size，用于梯度缩放与日志
+  max_steps: 200000                       # 训练终止步数
+  gradient_accumulation: 64               # 梯度累积步数 = global / (micro * world_size)
+  precision: "bf16"                      # 训练精度控制，可选 bf16、fp16、fp32 等
+  gradient_checkpointing: false           # 是否启用梯度检查点以换取显存
+  save_interval: 1000                     # 每隔多少步保存一次 checkpoint
+  log_interval: 100                       # 日志输出步频
+
+# 本地数据模式：直接从本地 JSONL 文件读取（适合调试和小规模训练）
+data:
+  type: "local"                          # 数据读取模式：local 本地文件，streaming 远程流式
+  path: "/home/modelenv/chentianxuan/projects/llm/AnotherLLMFromScratch/data/openwebtext_subset.jsonl"
+  # 当 type=local 时，指向本地 JSONL/JSON 文本语料。Dataset 会逐行读取并切分为样本。
+  shuffle: true                           # 是否在 epoch 开始时打乱样本
+  num_workers: 4                          # PyTorch DataLoader worker 数量
+  prefetch_factor: 2                      # 每个 worker 的预取批次数
+  max_samples: null                       # 限制加载样本数；null 表示使用全部数据
+  tokenizer_batch_size: 2048              # 单次 tokenizer 处理的 token 数量（指导 Dataset 切块）
+
+# 流式数据模式：从 Hugging Face Hub 按需加载大规模数据（供参考，实际使用时启用本块）
+# data:
+#   type: "streaming"
+#   provider: "huggingface"
+#   path: "allenai/c4"
+#   subset: "en"
+#   streaming_kwargs:
+#     token: ${HF_TOKEN}                  # 可选字段，访问私有数据集时提供认证 token
+#     batch_size: 1000                    # datasets.iter_streaming 的内部批大小
+#   shuffle: true                         # streaming 模式也可启用随机打散
+#   max_samples: null                     # 仍可限制样本数，null 表示使用全量
+#   tokenizer_batch_size: 2048            # 流式模式下一样需要告知 tokenizer 切块大小
+
+evaluation:
+  interval: 1000                          # 每隔多少训练步触发一次评估；设置为0可关闭
+  max_new_tokens: 128                     # 生成评估时，每个 prompt 续写的最大 token 数
+  prompts:
+    - "Today is a beautiful day, because"   # 英文提示，用于快速 sanity check
+    - "今天天气很好，因为"                    # 中文提示，确保双语场景也被覆盖
+    - "In a groundbreaking discovery, scientists"  # 可根据业务自定义更多种类
+
+  # 评估阶段 Trainer 会对 prompts 中的每条提示执行模型生成，并记录示例输出。
+  # 若需要定量指标，可在 Trainer 中实现 perplexity 或 validation loss 计算，
+  # 然后保留 interval 设定、把 prompts 留空或指向验证集路径。
+
+logging:
+  backend: "tensorboard"                 # 日志后端，可选 tensorboard、wandb、none
+  project: "another-llm-from-scratch"     # 对应后端的项目/运行分组
+
