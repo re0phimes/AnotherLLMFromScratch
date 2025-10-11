@@ -13,7 +13,7 @@
 - 梯度裁剪
 - 学习率调度
 - 检查点管理
-- 分布式训练支持（可选）
+- 分布式训练支持 (DDP)
 
 作者：AnotherLLMFromScratch 项目
 """
@@ -30,10 +30,25 @@ from torch.amp import GradScaler, autocast
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import _LRScheduler
 
+# 导入分布式工具
+import sys
+sys.path.append(str(Path(__file__).parent.parent))
+from utils.distributed import (
+    is_distributed, 
+    is_main_process, 
+    get_rank,
+    get_local_rank,
+    get_world_size,
+    reduce_tensor,
+    setup_distributed,
+    cleanup_distributed,
+    get_device
+)
+
 
 class Trainer:
     """
-    高效的训练器实现
+    高效的训练器实现，支持单机/分布式训练
     
     参数：
         model: 模型
@@ -41,14 +56,25 @@ class Trainer:
         train_loader: 训练数据加载器
         val_loader: 验证数据加载器（可选）
         scheduler: 学习率调度器（可选）
-        device: 训练设备
+        device: 训练设备（如果为 None 则自动检测）
         max_epochs: 最大训练轮数
         grad_accum_steps: 梯度累积步数
         max_grad_norm: 梯度裁剪阈值（0 表示不裁剪）
         use_amp: 是否使用混合精度
+        use_ddp: 是否使用 DistributedDataParallel（自动检测）
         log_interval: 日志打印间隔
         save_dir: 检查点保存目录
         save_interval: 检查点保存间隔（按 epoch）
+    
+    使用示例：
+        单机训练：
+        >>> trainer = Trainer(model, optimizer, train_loader)
+        >>> trainer.train()
+        
+        分布式训练（使用 torchrun）：
+        >>> # torchrun --nproc_per_node=4 train.py
+        >>> trainer = Trainer(model, optimizer, train_loader)
+        >>> trainer.train()  # 自动检测并启用 DDP
     """
     
     def __init__(
@@ -58,31 +84,59 @@ class Trainer:
         train_loader: DataLoader,
         val_loader: Optional[DataLoader] = None,
         scheduler: Optional[_LRScheduler] = None,
-        device: str = 'cuda' if torch.cuda.is_available() else 'cpu',
+        device: Optional[str] = None,
         max_epochs: int = 10,
         grad_accum_steps: int = 1,
         max_grad_norm: float = 1.0,
         use_amp: bool = True,
+        use_ddp: Optional[bool] = None,
         log_interval: int = 10,
         save_dir: str = './checkpoints',
         save_interval: int = 1
     ):
-        self.model = model.to(device)
+        # 检测分布式环境
+        self.is_distributed = is_distributed()
+        self.rank = get_rank()
+        self.local_rank = get_local_rank()
+        self.world_size = get_world_size()
+        self.is_main = is_main_process()
+        
+        # 自动确定设备
+        if device is None:
+            device = get_device()
+        self.device = device
+        
+        # 移动模型到设备
+        self.model = model.to(self.device)
+        
+        # 自动决定是否使用 DDP
+        if use_ddp is None:
+            use_ddp = self.is_distributed
+        self.use_ddp = use_ddp
+        
+        # 如果是分布式训练，使用 DDP 包装模型
+        if self.use_ddp and self.is_distributed:
+            self.model = nn.parallel.DistributedDataParallel(
+                self.model,
+                device_ids=[self.local_rank] if torch.cuda.is_available() else None,
+                output_device=self.local_rank if torch.cuda.is_available() else None
+            )
+        
         self.optimizer = optimizer
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.scheduler = scheduler
-        self.device = device
         
         self.max_epochs = max_epochs
         self.grad_accum_steps = grad_accum_steps
         self.max_grad_norm = max_grad_norm
-        self.use_amp = use_amp and device == 'cuda'
+        self.use_amp = use_amp and 'cuda' in self.device
         self.log_interval = log_interval
         self.save_interval = save_interval
         
         self.save_dir = Path(save_dir)
-        self.save_dir.mkdir(parents=True, exist_ok=True)
+        if self.is_main:
+            self.save_dir.mkdir(parents=True, exist_ok=True)
         
         self.current_epoch = 0
         self.global_step = 0
@@ -90,13 +144,19 @@ class Trainer:
         
         self.scaler = GradScaler('cuda') if self.use_amp else None
         
-        self._print_config()
+        if self.is_main:
+            self._print_config()
     
     def _print_config(self):
-        """打印训练配置"""
+        """打印训练配置（仅主进程）"""
         print(f"\n{'='*70}")
         print("训练器配置")
         print(f"{'='*70}")
+        print(f"分布式训练: {self.is_distributed}")
+        if self.is_distributed:
+            print(f"Rank: {self.rank}/{self.world_size}")
+            print(f"Local Rank: {self.local_rank}")
+            print(f"DDP启用: {self.use_ddp}")
         print(f"设备: {self.device}")
         print(f"最大轮数: {self.max_epochs}")
         print(f"梯度累积: {self.grad_accum_steps}")
@@ -166,6 +226,15 @@ class Trainer:
         avg_loss = total_loss / len(self.train_loader)
         elapsed = time.time() - start_time
         
+        # 分布式训练：同步损失和 token 数
+        if self.is_distributed:
+            avg_loss_tensor = torch.tensor(avg_loss, device=self.device)
+            total_tokens_tensor = torch.tensor(total_tokens, device=self.device)
+            avg_loss_tensor = reduce_tensor(avg_loss_tensor, op='mean')
+            total_tokens_tensor = reduce_tensor(total_tokens_tensor, op='sum')
+            avg_loss = avg_loss_tensor.item()
+            total_tokens = int(total_tokens_tensor.item())
+        
         return {
             'loss': avg_loss,
             'ppl': math.exp(min(avg_loss, 20)),  # 限制防止溢出
@@ -196,6 +265,12 @@ class Trainer:
             total_tokens += input_ids.numel()
         
         avg_loss = total_loss / len(self.val_loader)
+        
+        # 分布式训练：同步验证损失
+        if self.is_distributed:
+            avg_loss_tensor = torch.tensor(avg_loss, device=self.device)
+            avg_loss_tensor = reduce_tensor(avg_loss_tensor, op='mean')
+            avg_loss = avg_loss_tensor.item()
         
         return {
             'loss': avg_loss,
