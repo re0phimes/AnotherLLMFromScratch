@@ -137,6 +137,7 @@ class GPT2Model(nn.Module):
         vocab_size: int,
         n_layer: int,
         n_head: int,
+        
         n_embd: int,
         block_size: int,
         *,
@@ -256,6 +257,97 @@ class GPT2Model(nn.Module):
             hidden_states=tuple(all_hidden_states) if all_hidden_states is not None else None,
             attentions=tuple(all_attentions) if all_attentions is not None else None,
         )
+
+    @torch.inference_mode()
+    def generate(
+        self,
+        input_ids: torch.Tensor,
+        max_new_tokens: int,
+        *,
+        temperature: float = 1.0,
+        top_k: Optional[int] = None,
+        top_p: Optional[float] = None,
+        pad_token_id: Optional[int] = None,
+    ) -> torch.Tensor:
+        """自回归生成新 token。
+
+        Args:
+            input_ids: 输入 token ids，形状 (B, T)
+            max_new_tokens: 要生成的最大 token 数量
+            temperature: 采样温度，>1.0 更随机，<1.0 更确定，0.0 为贪婪解码
+            top_k: 保留概率最高的 k 个 token，其余设为 -inf
+            top_p: 核采样，保留累积概率达到 p 的最小 token 集合
+            pad_token_id: padding token id，用于截断超长序列
+
+        Returns:
+            生成的完整序列（包含输入），形状 (B, T+max_new_tokens)
+        """
+        batch_size, seq_len = input_ids.shape
+        device = input_ids.device
+
+        # 设置随机数生成器以确保可复现性
+        if temperature > 0:
+            rng = torch.Generator(device=device)
+        else:
+            rng = None
+
+        # 开始生成循环
+        for _ in range(max_new_tokens):
+            # 如果序列超过最大长度，截断早期 token
+            if input_ids.size(1) > self.config["block_size"]:
+                input_ids_cropped = input_ids[:, -self.config["block_size"]:]
+            else:
+                input_ids_cropped = input_ids
+
+            # 前向传播获取 logits
+            outputs = self.forward(input_ids_cropped)
+            logits = outputs.logits  # (B, T, vocab_size)
+
+            # 只取最后一个位置的 logits
+            logits = logits[:, -1, :]  # (B, vocab_size)
+
+            # 应用 temperature
+            if temperature > 0:
+                logits = logits / temperature
+            else:
+                # temperature=0 表示贪婪解码
+                next_token_ids = torch.argmax(logits, dim=-1, keepdim=True)
+                input_ids = torch.cat([input_ids, next_token_ids], dim=1)
+                continue
+
+            # 应用 top-k 过滤
+            if top_k is not None:
+                v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+                logits[logits < v[:, [-1]]] = -float('Inf')
+
+            # 应用 top-p (nucleus) 过滤
+            if top_p is not None and top_p < 1.0:
+                sorted_logits, sorted_indices = torch.sort(logits, descending=True)
+                cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
+
+                # 移除累积概率超过 top_p 的 token
+                sorted_indices_to_remove = cumulative_probs > top_p
+                # 保留第一个超过阈值的 token
+                sorted_indices_to_remove[:, 1:] = sorted_indices_to_remove[:, :-1].clone()
+                sorted_indices_to_remove[:, 0] = False
+
+                # 将要移除的位置设为 -inf
+                for batch_idx in range(batch_size):
+                    indices_to_remove = sorted_indices[batch_idx][sorted_indices_to_remove[batch_idx]]
+                    logits[batch_idx, indices_to_remove] = -float('Inf')
+
+            # 转换为概率并采样
+            probs = F.softmax(logits, dim=-1)
+            next_token_ids = torch.multinomial(probs, num_samples=1, generator=rng)
+
+            # 拼接到序列中
+            input_ids = torch.cat([input_ids, next_token_ids], dim=1)
+
+            # 如果所有序列都生成了 pad_token，提前停止
+            if pad_token_id is not None and (next_token_ids == pad_token_id).all():
+                break
+
+        return input_ids
 
 
 __all__ = ["GPT2Model", "GPT2ModelOutput", "GPT2Block"]

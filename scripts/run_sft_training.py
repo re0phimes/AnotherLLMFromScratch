@@ -315,6 +315,21 @@ def run_training(config_path: Path, args: argparse.Namespace) -> None:
     logger.info("训练最大轮数: {}", artifacts.max_epochs)
     logger.info("梯度累积步数: {}", artifacts.grad_accum_steps)
 
+    # 提取生成评估配置
+    training_cfg = config.get("training", {})
+    eval_cfg = config.get("evaluation", {})
+    
+    eval_interval = training_cfg.get("eval_interval", None)
+    eval_prompts = eval_cfg.get("prompts", None)
+    eval_max_tokens = eval_cfg.get("max_new_tokens", 100)
+    eval_temperature = eval_cfg.get("temperature", 0.8)
+    eval_top_k = eval_cfg.get("top_k", None)
+    eval_top_p = eval_cfg.get("top_p", 0.9)
+    
+    if eval_interval is not None and eval_prompts:
+        logger.info("启用生成评估: 每 {} 步生成样本", eval_interval)
+        logger.info("评估 prompts 数量: {}", len(eval_prompts))
+
     trainer = SFTTrainer(
         model=artifacts.model,
         optimizer=artifacts.optimizer,
@@ -326,6 +341,14 @@ def run_training(config_path: Path, args: argparse.Namespace) -> None:
         use_amp=artifacts.use_amp,
         save_dir=str(artifacts.save_dir),
         log_interval=artifacts.log_interval,
+        # 生成评估参数
+        tokenizer=artifacts.tokenizer,
+        eval_interval=eval_interval,
+        eval_prompts=eval_prompts,
+        eval_max_tokens=eval_max_tokens,
+        eval_temperature=eval_temperature,
+        eval_top_k=eval_top_k,
+        eval_top_p=eval_top_p,
     )
 
     try:

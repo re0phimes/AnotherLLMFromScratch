@@ -148,6 +148,15 @@ class BaseTrainer(ABC):
         # 保存额外的kwargs供子类使用
         self.extra_config = kwargs
         
+        # 评估生成配置
+        self.eval_interval = kwargs.get('eval_interval', None)
+        self.eval_prompts = kwargs.get('eval_prompts', None)
+        self.eval_max_tokens = kwargs.get('eval_max_tokens', 100)
+        self.eval_temperature = kwargs.get('eval_temperature', 1.0)
+        self.eval_top_k = kwargs.get('eval_top_k', None)
+        self.eval_top_p = kwargs.get('eval_top_p', None)
+        self.tokenizer = kwargs.get('tokenizer', None)
+        
         if self.is_main:
             self._print_config()
     
@@ -285,6 +294,11 @@ class BaseTrainer(ABC):
                 # 打印日志
                 if self.global_step % self.log_interval == 0:
                     self._log_training_step(loss, batch_idx, batch_prepared)
+                
+                # 定期生成样本
+                if (self.eval_interval is not None and 
+                    self.global_step % self.eval_interval == 0):
+                    self.generate_samples()
             
             total_loss += loss.item() * self.grad_accum_steps
             total_tokens += self._count_tokens(batch_prepared)
@@ -341,6 +355,73 @@ class BaseTrainer(ABC):
             'loss': avg_loss,
             'ppl': math.exp(min(avg_loss, 20))
         }
+    
+    @torch.inference_mode()
+    def generate_samples(self):
+        """
+        生成样本文本用于评估
+        
+        使用配置中的 prompts 生成文本，并打印结果（仅主进程）
+        需要模型实现 generate 方法，且需要提供 tokenizer
+        """
+        if not self.is_main:
+            return
+        
+        if self.tokenizer is None:
+            return
+        
+        if self.eval_prompts is None or len(self.eval_prompts) == 0:
+            return
+        
+        # 获取原始模型（如果使用了 DDP）
+        model = self.model.module if self.use_ddp else self.model
+        
+        # 检查模型是否有 generate 方法
+        if not hasattr(model, 'generate'):
+            print("\n警告: 模型没有 generate 方法，跳过生成评估")
+            return
+        
+        model.eval()
+        
+        print(f"\n{'='*70}")
+        print(f"生成样本 (Step {self.global_step})")
+        print(f"{'='*70}")
+        
+        for idx, prompt in enumerate(self.eval_prompts, 1):
+            try:
+                # Tokenize prompt
+                if hasattr(self.tokenizer, 'encode'):
+                    input_ids = self.tokenizer.encode(prompt, return_tensors='pt')
+                else:
+                    input_ids = self.tokenizer(prompt, return_tensors='pt')['input_ids']
+                
+                input_ids = input_ids.to(self.device)
+                
+                # 生成
+                generated_ids = model.generate(
+                    input_ids=input_ids,
+                    max_new_tokens=self.eval_max_tokens,
+                    temperature=self.eval_temperature,
+                    top_k=self.eval_top_k,
+                    top_p=self.eval_top_p,
+                )
+                
+                # Decode
+                generated_text = self.tokenizer.decode(
+                    generated_ids[0],
+                    skip_special_tokens=True
+                )
+                
+                print(f"\n[Prompt {idx}]: {prompt}")
+                print(f"[Generated]: {generated_text}")
+                print("-" * 70)
+                
+            except Exception as e:
+                print(f"\n生成失败 (Prompt {idx}): {e}")
+                print("-" * 70)
+        
+        print()
+        model.train()
     
     def _count_tokens(self, batch: Dict[str, Any]) -> int:
         """

@@ -19,12 +19,12 @@ optimizer:
 
 scheduler:
   name: "cosine"
-  warmup_steps: 1000
-  total_steps: 50000
+  warmup_steps: 750
+  total_steps: 37500
   min_lr: 1.0e-5
 
 training:
-  max_epochs: 3
+  max_epochs: 1
   micro_batch_size: 2
   gradient_accumulation: 32
   max_grad_norm: 1.0
@@ -47,4 +47,8 @@ evaluation:
   prompts:
     - "中国经济正处于"
     - "在未来的科技创新领域"
+    - "china is one the age of "
   max_new_tokens: 120
+  temperature: 1.0
+  top_k: 30
+  top_p: 0.9

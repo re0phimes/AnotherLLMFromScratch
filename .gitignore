@@ -136,3 +136,11 @@ cython_debug/
 .cursor/
 .memory/
 AGENTS.md
+
+# Training artifacts
+checkpoints/
+outputs/
+wandb/
+*.pt
+*.pth
+*.ckpt
