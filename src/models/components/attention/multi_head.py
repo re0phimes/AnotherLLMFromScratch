@@ -52,6 +52,63 @@ class MultiHeadSelfAttention(nn.Module):
         self.use_flash = bool(use_flash and hasattr(F, "scaled_dot_product_attention"))
         self._reset_parameters()
 
+    def _prepare_attention_mask(
+        self,
+        attention_mask: torch.Tensor,
+        *,
+        batch_size: int,
+        tgt_len: int,
+        src_len: int,
+        dtype: torch.dtype,
+    ) -> torch.Tensor:
+        """将输入的 attention_mask 广播到 Flash/SDPA 期望的 4 维形状。"""
+
+        mask = attention_mask.to(device=attention_mask.device)
+
+        if mask.dim() == 2:  # (B, S)
+            mask = mask[:, None, None, :]
+        elif mask.dim() == 3:  # (B, T, S)
+            mask = mask[:, None, :, :]
+        elif mask.dim() != 4:
+            raise ValueError(
+                "attention_mask must have 2, 3 or 4 dimensions, got " f"{mask.dim()}"
+            )
+
+        if mask.size(0) != batch_size:
+            if mask.size(0) == 1:
+                mask = mask.expand(batch_size, *mask.shape[1:])
+            else:
+                raise ValueError(
+                    "attention_mask batch dimension mismatch: "
+                    f"expected {batch_size}, got {mask.size(0)}"
+                )
+        if mask.size(-1) != src_len:
+            raise ValueError(
+                "attention_mask last dimension must match source length: "
+                f"expected {src_len}, got {mask.size(-1)}"
+            )
+        if mask.size(-2) not in (1, tgt_len):
+            raise ValueError(
+                "attention_mask penultimate dimension must broadcast to tgt_len: "
+                f"expected 1 or {tgt_len}, got {mask.size(-2)}"
+            )
+
+        if mask.dtype == torch.bool:
+            return mask
+
+        if mask.is_floating_point():
+            # 判定是否是二值掩码（0/1），是的话转为 bool；否则按 additive mask 处理。
+            if torch.all((mask == 0) | (mask == 1)):
+                return mask.to(dtype=torch.bool)
+            return mask.to(dtype=dtype)
+
+        if mask.dtype in (torch.int8, torch.int16, torch.int32, torch.int64):
+            if torch.all((mask == 0) | (mask == 1)):
+                return mask.to(dtype=torch.bool)
+            return mask.to(dtype=dtype)
+
+        raise TypeError(f"Unsupported attention_mask dtype: {mask.dtype}")
+
     def _reset_parameters(self) -> None:
         nn.init.xavier_uniform_(self.qkv_proj.weight)
         if self.qkv_proj.bias is not None:
@@ -79,12 +136,22 @@ class MultiHeadSelfAttention(nn.Module):
         k = k.view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
         v = v.view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
 
+        prepared_mask: Optional[torch.Tensor] = None
+        if attention_mask is not None:
+            prepared_mask = self._prepare_attention_mask(
+                attention_mask,
+                batch_size=B,
+                tgt_len=T,
+                src_len=k.size(-2),
+                dtype=q.dtype,
+            )
+
         if self.use_flash:
             attn_output = F.scaled_dot_product_attention(
                 q,
                 k,
                 v,
-                attn_mask=attention_mask,
+                attn_mask=prepared_mask,
                 dropout_p=self.attn_dropout if self.training else 0.0,
                 is_causal=is_causal and (attention_mask is None),
             )
@@ -92,11 +159,11 @@ class MultiHeadSelfAttention(nn.Module):
         else:
             scale = 1.0 / (self.head_dim ** 0.5)
             attn_scores = torch.matmul(q, k.transpose(-2, -1)) * scale
-            if attention_mask is not None:
-                if attention_mask.dtype == torch.bool:
-                    attn_scores = attn_scores.masked_fill(~attention_mask, float("-inf"))
+            if prepared_mask is not None:
+                if prepared_mask.dtype == torch.bool:
+                    attn_scores = attn_scores.masked_fill(~prepared_mask, float("-inf"))
                 else:
-                    attn_scores = attn_scores + attention_mask
+                    attn_scores = attn_scores + prepared_mask
             elif is_causal:
                 causal_mask = torch.ones((T, T), dtype=torch.bool, device=hidden_states.device).tril()
                 attn_scores = attn_scores.masked_fill(~causal_mask, float("-inf"))

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, is_dataclass
+from dataclasses import asdict, fields, is_dataclass
 from typing import Any, Dict, Mapping, Tuple, Type, Union
 
 import torch.nn as nn
@@ -38,7 +38,15 @@ class AutoConfig:
         config_payload = dict(config_dict)
         config_payload.pop("model_family", None)
         config_payload.pop("model_type", None)
-        return config_cls.from_dict(config_payload)
+
+        allowed_fields = {field.name for field in fields(config_cls)}
+        config_kwargs = {key: value for key, value in config_payload.items() if key in allowed_fields}
+        extra_kwargs = {key: value for key, value in config_payload.items() if key not in allowed_fields}
+
+        config = config_cls.from_dict(config_kwargs)
+        for key, value in extra_kwargs.items():
+            setattr(config, key, value)
+        return config
 
     @classmethod
     def to_dict(cls, config: ModelConfig) -> Dict[str, Any]:

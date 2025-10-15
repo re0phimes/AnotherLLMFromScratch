@@ -140,6 +140,10 @@ class BaseTrainer(ABC):
         self.best_val_loss = float('inf')
         
         self.scaler = GradScaler('cuda') if self.use_amp else None
+
+        # epoch 统计信息
+        self._epoch_start_time: float = 0.0
+        self._epoch_total_batches: int = 0
         
         # 保存额外的kwargs供子类使用
         self.extra_config = kwargs
@@ -233,6 +237,8 @@ class BaseTrainer(ABC):
         total_loss = 0.0
         total_tokens = 0
         start_time = time.time()
+        self._epoch_start_time = start_time
+        self._epoch_total_batches = len(self.train_loader)
         
         for batch_idx, batch in enumerate(self.train_loader):
             # 准备数据（子类实现）
@@ -358,14 +364,28 @@ class BaseTrainer(ABC):
         current_loss = loss.item() * self.grad_accum_steps
         current_ppl = math.exp(min(current_loss, 20))
         current_lr = self.optimizer.param_groups[0]['lr']
+
+        processed_batches = batch_idx + 1
+        elapsed = max(time.time() - self._epoch_start_time, 0.0)
+        avg_time = elapsed / processed_batches if processed_batches > 0 else 0.0
+        remaining_batches = max(self._epoch_total_batches - processed_batches, 0)
+        eta_seconds = remaining_batches * avg_time
+
+        def _format_duration(seconds: float) -> str:
+            seconds = max(int(seconds), 0)
+            minutes, secs = divmod(seconds, 60)
+            hours, minutes = divmod(minutes, 60)
+            return f"{hours:02d}:{minutes:02d}:{secs:02d}"
         
         # 基础日志
         log_str = (f"Epoch {self.current_epoch} | "
                    f"Step {self.global_step} | "
-                   f"Batch {batch_idx}/{len(self.train_loader)} | "
+                   f"Batch {processed_batches}/{self._epoch_total_batches} | "
                    f"Loss: {current_loss:.4f} | "
                    f"PPL: {current_ppl:.2f} | "
-                   f"LR: {current_lr:.6f}")
+                   f"LR: {current_lr:.6f} | "
+                   f"Elapsed: {_format_duration(elapsed)} | "
+                   f"ETA: {_format_duration(eta_seconds)}")
         
         # 子类可以添加额外信息
         extra_log = self._get_extra_log_info(batch)

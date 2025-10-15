@@ -1,7 +1,7 @@
 model_family: "gpt2"
 model_name: "gpt_125m"
 
-vocab_size: 50257
+vocab_size: 151936
 n_layer: 12
 n_head: 12
 n_embd: 768
@@ -11,9 +11,9 @@ attn_dropout: 0.0
 resid_dropout: 0.1
 mlp_multiplier: 4.0
 activation: "gelu"
-layer_norm_eps: 1e-5
+layer_norm_eps: 1.0e-5
 qkv_bias: true
 use_flash: true
-pad_token_id: 50256
+pad_token_id: 151643
 output_hidden_states: false
 output_attentions: false

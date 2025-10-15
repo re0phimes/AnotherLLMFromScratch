@@ -61,6 +61,11 @@ try:
 except ImportError:  # pragma: no cover - streaming 功能依赖 datasets
     hf_datasets = None  # type: ignore[assignment]
 
+try:
+    from tqdm.auto import tqdm
+except ImportError:  # pragma: no cover - tqdm 为可选依赖
+    tqdm = None  # type: ignore[assignment]
+
 
 # ---------------------------------------------------------------------------
 # Helper data structures
@@ -99,7 +104,12 @@ class LocalJsonlDataset(Dataset[Dict[str, Any]]):
         self._records: List[Dict[str, Any]] = []
         max_samples = source.max_samples
         with path.open("r", encoding="utf-8") as fp:
-            for line in fp:
+            iterator = fp
+            progress = None
+            if tqdm is not None:
+                progress = tqdm(fp, desc=f"Loading {source.name or path.name}", unit="lines")
+                iterator = progress
+            for line in iterator:
                 line = line.strip()
                 if not line:
                     continue
@@ -113,6 +123,8 @@ class LocalJsonlDataset(Dataset[Dict[str, Any]]):
                 self._records.append({"text": text, "source": source.name})
                 if max_samples is not None and len(self._records) >= max_samples:
                     break
+            if progress is not None:
+                progress.close()
         if not self._records:
             raise ValueError(f"Local dataset {source.path} yielded no usable samples.")
 

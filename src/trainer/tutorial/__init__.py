@@ -30,11 +30,13 @@
 
 from .optimizer_from_scratch import AdamWFromScratch, SGDFromScratch
 from .trainer_from_scratch import TrainerFromScratch
+from .train_with_custom_data import main as run_tutorial_training
 
 __all__ = [
     'AdamWFromScratch',
     'SGDFromScratch',
     'TrainerFromScratch',
+    'run_tutorial_training',
 ]
 
 __version__ = '1.0.0'

@@ -89,7 +89,10 @@ class SFTTrainer(BaseTrainer):
         
         # 移动 attention_mask 到设备（如果存在）
         if 'attention_mask' in batch:
-            prepared['attention_mask'] = batch['attention_mask'].to(self.device)
+            attention_mask = batch['attention_mask'].to(self.device)
+            if attention_mask.dtype not in (torch.bool, torch.float32, torch.float16, torch.bfloat16):
+                attention_mask = attention_mask.to(dtype=torch.float32)
+            prepared['attention_mask'] = attention_mask
         
         return prepared
     

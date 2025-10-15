@@ -1,0 +1,50 @@
+# GPT-2 指令微调配置（ChinaNews 数据）
+
+run_name: "gpt2_sft_chinanews"
+seed: 1234
+
+trainer:
+  type: "sft"
+
+model:
+  model_config_path: "/home/modelenv/chentianxuan/projects/llm/AnotherLLMFromScratch/configs/model/gpt_125m.yaml"
+  tokenizer_name_or_path: "Qwen/Qwen2-0.5B"
+
+optimizer:
+  name: "adamw"
+  lr: 2.0e-4
+  betas: [0.9, 0.95]
+  weight_decay: 0.1
+  eps: 1.0e-8
+
+scheduler:
+  name: "cosine"
+  warmup_steps: 1000
+  total_steps: 50000
+  min_lr: 1.0e-5
+
+training:
+  max_epochs: 3
+  micro_batch_size: 2
+  gradient_accumulation: 32
+  max_grad_norm: 1.0
+  use_amp: true
+  save_dir: "./checkpoints/gpt2_sft_chinanews"
+  log_interval: 10
+  eval_interval: 2000
+
+data:
+  type: "local"
+  path: "/home/modelenv/chentianxuan/projects/open_source_data_process/data/chinanews_pretrain.jsonl"
+  sequence_length: 1024
+  tokenizer_batch_size: 2048
+  num_workers: 4
+  prefetch_factor: 2
+  shuffle: true
+  max_samples: 1200000
+
+evaluation:
+  prompts:
+    - "中国经济正处于"
+    - "在未来的科技创新领域"
+  max_new_tokens: 120
