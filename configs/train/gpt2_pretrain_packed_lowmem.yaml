@@ -1,0 +1,67 @@
+# GPT-2 预训练配置 - 低内存版本（适配 24GB 显存）
+# 优化策略：更小的 micro_batch_size + 更多的梯度累积
+
+model:
+  model_config_path: configs/model/gpt_125m.yaml
+  tokenizer_name_or_path: Qwen/Qwen2.5-0.5B
+  use_flash_attention: false
+
+data:
+  data_sources:
+    - path: /home/modelenv/chentianxuan/projects/open_source_data_process/data/chinanews_pretrain.jsonl
+      type: local
+      name: chinanews_pretrain
+  
+  pack_sequences: true
+  shuffle_buffer_size: 5000
+  sequence_length: 1024             # 保持 1024，充分利用上下文
+  
+  add_bos: false
+  add_eos: false
+  padding: do_not_pad
+
+training:
+  output_dir: ./checkpoints/gpt2_pretrain_packed_lowmem
+  num_train_epochs: 3
+  
+  # 批次配置 - 极度保守（确保不 OOM）
+  micro_batch_size: 2               # 最小化每步的内存占用
+  gradient_accumulation: 16         # 增加累积步数保持有效 batch size
+  # 有效 batch size = 2 × 16 × 1 = 32
+  
+  # 优化器配置
+  learning_rate: 5.0e-5
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  
+  # 学习率调度
+  warmup_steps: 500
+  lr_scheduler_type: cosine
+  
+  # 保存和日志
+  save_steps: 1000
+  logging_steps: 10
+  eval_interval: 500                # 每 500 步进行生成评估
+  
+  # 混合精度训练
+  use_amp: true                     # 必须启用，减少内存使用
+  
+  # 分布式配置
+  ddp: false
+  local_rank: -1
+
+# 生成评估配置
+evaluation:
+  prompts:
+    - "新华社北京"
+    - "据悉，"
+    - "记者从"
+    - "今日，"
+    - "中国"
+  max_new_tokens: 100
+  temperature: 0.8
+  top_p: 0.9
+  top_k: 50
+  repetition_penalty: 1.1
+
+seed: 42

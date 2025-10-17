@@ -1,0 +1,73 @@
+# GPT-2 预训练配置 - 使用打包式数据流（无 padding）
+# 此配置实现方案2：shuffle buffer + token packing + residual carry-over
+
+model:
+  model_config_path: configs/model/gpt_125m.yaml
+  tokenizer_name_or_path: Qwen/Qwen2.5-0.5B
+  use_flash_attention: false
+
+data:
+  # 数据源配置
+  data_sources:
+    - path: /home/modelenv/chentianxuan/projects/open_source_data_process/data/chinanews_pretrain.jsonl
+      type: local
+      name: chinanews_pretrain
+  
+  # 打包式预训练配置
+  pack_sequences: true              # 启用打包模式
+  shuffle_buffer_size: 5000         # shuffle buffer 大小
+  sequence_length: 1024             # 固定序列长度
+  
+  # 传统配置（打包模式下不生效）
+  add_bos: false                    # 打包模式下不需要每个样本都有 BOS
+  add_eos: false                    # 由打包逻辑自动添加 EOS 作为分隔符
+  padding: do_not_pad               # 打包模式下不需要 padding
+
+training:
+  output_dir: ./checkpoints/gpt2_pretrain_packed
+  num_train_epochs: 3
+  
+  # 批次配置（优化显存使用）
+  micro_batch_size: 4               # 每张卡的 batch size (降低以适应 24GB 显存)
+  gradient_accumulation: 8          # 梯度累积步数 (增加以保持有效 batch size)
+  # 有效 batch size = micro_batch_size × gradient_accumulation × num_gpus
+  # 例如: 4 × 8 × 1 = 32 (与原配置相同)
+  
+  # 优化器配置
+  learning_rate: 5.0e-5
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  
+  # 学习率调度
+  warmup_steps: 500
+  lr_scheduler_type: cosine
+  
+  # 保存和日志
+  save_steps: 1000
+  logging_steps: 10
+  eval_interval: 500                # 每 500 步进行生成评估
+  
+  # 混合精度训练
+  use_amp: true
+  
+  # 分布式配置
+  ddp: false                        # 单卡训练设为 false
+  local_rank: -1
+
+# 生成评估配置
+evaluation:
+  prompts:
+    - "新华社北京"
+    - "据悉，"
+    - "记者从"
+    - "中国经济正处于"
+    - "在未来的科技创新领域"
+    - "china is one the age of "
+  max_new_tokens: 100
+  temperature: 0.8
+  top_p: 0.9
+  top_k: 50
+  repetition_penalty: 1.1
+
+# 其他配置
+seed: 42

@@ -10,7 +10,7 @@
 
 import os
 from typing import Tuple, Optional
-from utils.logger import logger
+from .logger import logger
 
 
 def is_distributed() -> bool:

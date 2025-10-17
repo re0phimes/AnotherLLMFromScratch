@@ -56,6 +56,7 @@ class TrainingArtifacts:
     use_amp: bool
     save_dir: Path
     log_interval: int
+    steps_per_epoch: Optional[int] = None
 
 
 def parse_args() -> argparse.Namespace:
@@ -84,6 +85,18 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=None,
         help="训练轮数覆盖值，可选",
+    )
+    parser.add_argument(
+        "--inspect-data",
+        action="store_true",
+        default=True,
+        help="在训练前检查第一个batch的数据（默认启用）",
+    )
+    parser.add_argument(
+        "--no-inspect-data",
+        action="store_false",
+        dest="inspect_data",
+        help="禁用数据检查",
     )
     return parser.parse_args()
 
@@ -164,7 +177,10 @@ def create_dataloader(
 
     dataset = module.build_dataset()
     sampler: Optional[DistributedSampler] = None
-    if is_distributed():
+    
+    is_iterable = isinstance(dataset, torch.utils.data.IterableDataset)
+    
+    if is_distributed() and not is_iterable:
         sampler = DistributedSampler(
             dataset,
             num_replicas=world_size,
@@ -174,7 +190,10 @@ def create_dataloader(
         )
         shuffle = False
     else:
-        shuffle = is_train and any(src.shuffle for src in module.config.sources)
+        if is_iterable:
+            shuffle = False
+        else:
+            shuffle = is_train and any(src.shuffle for src in module.config.sources)
 
     num_workers = override_workers if override_workers is not None else module.config.num_workers
     prefetch_factor = module.config.prefetch_factor if num_workers > 0 else None
@@ -255,8 +274,9 @@ def prepare_components(
         is_train=True,
         override_workers=args.num_workers,
     )
-    if len(train_loader) == 0:
-        raise ValueError("训练数据加载器为空，请检查 data.path 或批大小设置。")
+    if not isinstance(train_loader.dataset, torch.utils.data.IterableDataset):
+        if len(train_loader) == 0:
+            raise ValueError("训练数据加载器为空，请检查 data.path 或批大小设置。")
     val_loader = None
 
     optimizer_cfg = config.get("optimizer", {})
@@ -269,7 +289,16 @@ def prepare_components(
         eps=float(optimizer_cfg.get("eps", 1e-8)),
     )
 
-    steps_per_epoch = len(train_loader)
+    if isinstance(train_loader.dataset, torch.utils.data.IterableDataset):
+        max_steps = training_cfg.get("max_steps")
+        if max_steps is None:
+            steps_per_epoch = 1000
+            logger.warning("⚠ IterableDataset 无法确定长度，使用默认 steps_per_epoch={}", steps_per_epoch)
+        else:
+            steps_per_epoch = max_steps // max_epochs if max_epochs > 0 else max_steps
+    else:
+        steps_per_epoch = len(train_loader)
+    
     scheduler_cfg = config.get("scheduler", {})
     total_steps = max_epochs * steps_per_epoch
     scheduler = create_scheduler(optimizer, scheduler_cfg, total_steps)
@@ -291,6 +320,7 @@ def prepare_components(
         use_amp=use_amp,
         save_dir=save_dir,
         log_interval=log_interval,
+        steps_per_epoch=steps_per_epoch if isinstance(train_loader.dataset, torch.utils.data.IterableDataset) else None,
     )
 
 
@@ -311,7 +341,10 @@ def run_training(config_path: Path, args: argparse.Namespace) -> None:
 
     artifacts = prepare_components(config, args, rank, world_size)
 
-    logger.info("数据加载器每轮步数: {}", len(artifacts.train_loader))
+    if not isinstance(artifacts.train_loader.dataset, torch.utils.data.IterableDataset):
+        logger.info("数据加载器每轮步数: {}", len(artifacts.train_loader))
+    else:
+        logger.info("数据加载器: IterableDataset (未知长度)")
     logger.info("训练最大轮数: {}", artifacts.max_epochs)
     logger.info("梯度累积步数: {}", artifacts.grad_accum_steps)
 
@@ -325,10 +358,21 @@ def run_training(config_path: Path, args: argparse.Namespace) -> None:
     eval_temperature = eval_cfg.get("temperature", 0.8)
     eval_top_k = eval_cfg.get("top_k", None)
     eval_top_p = eval_cfg.get("top_p", 0.9)
+    eval_repetition_penalty = eval_cfg.get("repetition_penalty", 1.0)
     
     if eval_interval is not None and eval_prompts:
         logger.info("启用生成评估: 每 {} 步生成样本", eval_interval)
         logger.info("评估 prompts 数量: {}", len(eval_prompts))
+    
+    # 数据检查（仅在 rank 0 执行）
+    if is_main_process() and args.inspect_data:
+        from src.utils import inspect_first_batch
+        logger.info("=" * 80)
+        logger.info("开始检查训练数据...")
+        logger.info("=" * 80)
+        inspect_first_batch(artifacts.train_loader, artifacts.tokenizer, num_samples=2)
+        logger.info("数据检查完成，准备开始训练")
+        logger.info("=" * 80)
 
     trainer = SFTTrainer(
         model=artifacts.model,
@@ -341,6 +385,7 @@ def run_training(config_path: Path, args: argparse.Namespace) -> None:
         use_amp=artifacts.use_amp,
         save_dir=str(artifacts.save_dir),
         log_interval=artifacts.log_interval,
+        estimated_steps_per_epoch=artifacts.steps_per_epoch,
         # 生成评估参数
         tokenizer=artifacts.tokenizer,
         eval_interval=eval_interval,
@@ -349,6 +394,7 @@ def run_training(config_path: Path, args: argparse.Namespace) -> None:
         eval_temperature=eval_temperature,
         eval_top_k=eval_top_k,
         eval_top_p=eval_top_p,
+        eval_repetition_penalty=eval_repetition_penalty,
     )
 
     try:

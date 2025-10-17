@@ -22,6 +22,7 @@ from .distributed import (
     get_rank, get_local_rank, get_world_size, get_device, barrier,
     reduce_tensor, gather_tensor, broadcast_tensor, print_distributed_info
 )
+from .data_inspection import inspect_batch, inspect_first_batch
 
 __all__ = [
     # Logger模块
@@ -46,4 +47,8 @@ __all__ = [
     "gather_tensor",       # 张量收集
     "broadcast_tensor",    # 张量广播
     "print_distributed_info", # 打印分布式信息
+    
+    # Data Inspection模块
+    "inspect_batch",       # 检查单个batch
+    "inspect_first_batch", # 检查dataloader第一个batch
 ]

@@ -267,6 +267,7 @@ class GPT2Model(nn.Module):
         temperature: float = 1.0,
         top_k: Optional[int] = None,
         top_p: Optional[float] = None,
+        repetition_penalty: float = 1.0,
         pad_token_id: Optional[int] = None,
     ) -> torch.Tensor:
         """自回归生成新 token。
@@ -277,6 +278,7 @@ class GPT2Model(nn.Module):
             temperature: 采样温度，>1.0 更随机，<1.0 更确定，0.0 为贪婪解码
             top_k: 保留概率最高的 k 个 token，其余设为 -inf
             top_p: 核采样，保留累积概率达到 p 的最小 token 集合
+            repetition_penalty: 重复惩罚，>1.0 惩罚重复，<1.0 鼓励重复
             pad_token_id: padding token id，用于截断超长序列
 
         Returns:
@@ -305,6 +307,15 @@ class GPT2Model(nn.Module):
 
             # 只取最后一个位置的 logits
             logits = logits[:, -1, :]  # (B, vocab_size)
+
+            # 应用 repetition penalty
+            if repetition_penalty != 1.0:
+                for batch_idx in range(batch_size):
+                    for token_id in set(input_ids[batch_idx].tolist()):
+                        if logits[batch_idx, token_id] < 0:
+                            logits[batch_idx, token_id] *= repetition_penalty
+                        else:
+                            logits[batch_idx, token_id] /= repetition_penalty
 
             # 应用 temperature
             if temperature > 0:

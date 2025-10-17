@@ -89,6 +89,7 @@ class BaseTrainer(ABC):
         log_interval: int = 10,
         save_dir: str = './checkpoints',
         save_interval: int = 1,
+        estimated_steps_per_epoch: Optional[int] = None,
         **kwargs  # 子类可能需要额外参数
     ):
         # 检测分布式环境
@@ -143,7 +144,8 @@ class BaseTrainer(ABC):
 
         # epoch 统计信息
         self._epoch_start_time: float = 0.0
-        self._epoch_total_batches: int = 0
+        self._epoch_total_batches: Optional[int] = 0
+        self._estimated_steps_per_epoch: Optional[int] = estimated_steps_per_epoch
         
         # 保存额外的kwargs供子类使用
         self.extra_config = kwargs
@@ -155,6 +157,7 @@ class BaseTrainer(ABC):
         self.eval_temperature = kwargs.get('eval_temperature', 1.0)
         self.eval_top_k = kwargs.get('eval_top_k', None)
         self.eval_top_p = kwargs.get('eval_top_p', None)
+        self.eval_repetition_penalty = kwargs.get('eval_repetition_penalty', 1.0)
         self.tokenizer = kwargs.get('tokenizer', None)
         
         if self.is_main:
@@ -247,7 +250,10 @@ class BaseTrainer(ABC):
         total_tokens = 0
         start_time = time.time()
         self._epoch_start_time = start_time
-        self._epoch_total_batches = len(self.train_loader)
+        try:
+            self._epoch_total_batches = len(self.train_loader)
+        except TypeError:
+            self._epoch_total_batches = None
         
         for batch_idx, batch in enumerate(self.train_loader):
             # 准备数据（子类实现）
@@ -404,6 +410,7 @@ class BaseTrainer(ABC):
                     temperature=self.eval_temperature,
                     top_k=self.eval_top_k,
                     top_p=self.eval_top_p,
+                    repetition_penalty=self.eval_repetition_penalty,
                 )
                 
                 # Decode
@@ -449,8 +456,21 @@ class BaseTrainer(ABC):
         processed_batches = batch_idx + 1
         elapsed = max(time.time() - self._epoch_start_time, 0.0)
         avg_time = elapsed / processed_batches if processed_batches > 0 else 0.0
-        remaining_batches = max(self._epoch_total_batches - processed_batches, 0)
-        eta_seconds = remaining_batches * avg_time
+        
+        # 计算 ETA
+        if self._epoch_total_batches is not None:
+            # 精确已知总批次数
+            remaining_batches = max(self._epoch_total_batches - processed_batches, 0)
+            eta_seconds = remaining_batches * avg_time
+        elif self._estimated_steps_per_epoch is not None:
+            # 使用估算的 steps（对于 IterableDataset）
+            # 注意：processed_batches 是实际的 batch 数，需要除以 grad_accum_steps 得到 steps
+            current_step_in_epoch = self.global_step % self._estimated_steps_per_epoch if self._estimated_steps_per_epoch > 0 else self.global_step
+            remaining_steps = max(self._estimated_steps_per_epoch - current_step_in_epoch, 0)
+            remaining_batches = remaining_steps * self.grad_accum_steps
+            eta_seconds = remaining_batches * avg_time
+        else:
+            eta_seconds = 0.0
 
         def _format_duration(seconds: float) -> str:
             seconds = max(int(seconds), 0)
@@ -459,14 +479,25 @@ class BaseTrainer(ABC):
             return f"{hours:02d}:{minutes:02d}:{secs:02d}"
         
         # 基础日志
+        if self._epoch_total_batches is not None:
+            batch_info = f"{processed_batches}/{self._epoch_total_batches}"
+            eta_info = _format_duration(eta_seconds)
+        elif self._estimated_steps_per_epoch is not None:
+            # 对于 IterableDataset，显示步数而非批次数
+            current_step_in_epoch = self.global_step % self._estimated_steps_per_epoch if self._estimated_steps_per_epoch > 0 else self.global_step
+            batch_info = f"Step {current_step_in_epoch}/{self._estimated_steps_per_epoch} in epoch"
+            eta_info = _format_duration(eta_seconds)
+        else:
+            batch_info = f"{processed_batches}/?"
+            eta_info = "N/A"
         log_str = (f"Epoch {self.current_epoch} | "
                    f"Step {self.global_step} | "
-                   f"Batch {processed_batches}/{self._epoch_total_batches} | "
+                   f"Batch {batch_info} | "
                    f"Loss: {current_loss:.4f} | "
                    f"PPL: {current_ppl:.2f} | "
                    f"LR: {current_lr:.6f} | "
                    f"Elapsed: {_format_duration(elapsed)} | "
-                   f"ETA: {_format_duration(eta_seconds)}")
+                   f"ETA: {eta_info}")
         
         # 子类可以添加额外信息
         extra_log = self._get_extra_log_info(batch)

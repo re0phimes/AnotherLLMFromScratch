@@ -47,9 +47,10 @@ Example (`batch_size=2`, `seq_len=6`, using GPT-2 tokenizer IDs):
 """
 
 import json
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence
+from typing import Any, Deque, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
 
 import torch
 from torch.utils.data import ConcatDataset, Dataset, IterableDataset
@@ -78,6 +79,8 @@ class PretrainConfigExtras:
     add_eos: bool
     pad_to_multiple_of: Optional[int]
     padding_strategy: str
+    pack_sequences: bool = False
+    shuffle_buffer_size: int = 5000
 
 
 def _extract_text(record: Any) -> Optional[str]:
@@ -164,6 +167,89 @@ class StreamingIterableDataset(IterableDataset):
                 break
 
 
+class PackedPretrainDataset(IterableDataset):
+    """打包式预训练数据集，实现连续token流和shuffle buffer。
+    
+    核心逻辑：
+    1. 维护一个 shuffle_buffer，累积 N 条原始记录
+    2. 当 buffer 满时，随机打乱，然后拼接所有文本（用 <|endoftext|> 分隔）
+    3. 对拼接后的长文本进行 tokenize
+    4. 将 tokens 放入 token_buffer (deque)
+    5. 从 token_buffer 中切出固定长度的 chunks
+    6. 残留的 tokens 保留在 buffer 中，carry-over 到下一批
+    """
+    
+    def __init__(
+        self,
+        sources: Sequence[DataSourceConfig],
+        tokenizer,
+        sequence_length: int,
+        shuffle_buffer_size: int = 5000,
+        seed: int = 42,
+    ) -> None:
+        self.sources = sources
+        self.tokenizer = tokenizer
+        self.sequence_length = sequence_length
+        self.shuffle_buffer_size = shuffle_buffer_size
+        self.seed = seed
+        self.eos_token_id = tokenizer.eos_token_id
+        if self.eos_token_id is None:
+            raise ValueError("Tokenizer must have eos_token_id for packed pretraining.")
+    
+    def __iter__(self) -> Iterator[Dict[str, Any]]:
+        import random
+        
+        rng = random.Random(self.seed)
+        token_buffer: Deque[int] = deque()
+        shuffle_buffer: List[Dict[str, Any]] = []
+        
+        for source in self.sources:
+            dataset: IterableDataset
+            if source.type == "local":
+                dataset = LocalJsonlDataset(source)
+            elif source.type == "streaming":
+                dataset = StreamingIterableDataset(source)
+            else:
+                raise ValueError(f"Unknown source type: {source.type}")
+            
+            for record in dataset:
+                shuffle_buffer.append(record)
+                
+                if len(shuffle_buffer) >= self.shuffle_buffer_size:
+                    rng.shuffle(shuffle_buffer)
+                    
+                    for rec in shuffle_buffer:
+                        text = rec["text"]
+                        tokens = self.tokenizer.encode(text, add_special_tokens=False)
+                        tokens.append(self.eos_token_id)
+                        token_buffer.extend(tokens)
+                    
+                    shuffle_buffer.clear()
+                    
+                    while len(token_buffer) >= self.sequence_length:
+                        chunk = [token_buffer.popleft() for _ in range(self.sequence_length)]
+                        yield {
+                            "input_ids": torch.tensor(chunk, dtype=torch.long),
+                            "source": "packed"
+                        }
+        
+        if shuffle_buffer:
+            rng.shuffle(shuffle_buffer)
+            for rec in shuffle_buffer:
+                text = rec["text"]
+                tokens = self.tokenizer.encode(text, add_special_tokens=False)
+                tokens.append(self.eos_token_id)
+                token_buffer.extend(tokens)
+            shuffle_buffer.clear()
+        
+        while len(token_buffer) >= self.sequence_length:
+            chunk = [token_buffer.popleft() for _ in range(self.sequence_length)]
+            yield {
+                "input_ids": torch.tensor(chunk, dtype=torch.long),
+                "source": "packed"
+            }
+
+
 def _expand_datasets_with_weights(datasets: Sequence[Dataset[Any]], sources: Sequence[DataSourceConfig]) -> Dataset[Any]:
     """根据 sampling_weight 粗略扩充数据集，实现简单的权重混合。"""
     min_weight = min(src.sampling_weight for src in sources)
@@ -214,10 +300,21 @@ class PretrainDatasetModule(BaseDatasetModule):
             add_eos=bool(cfg.get("add_eos", True)),
             pad_to_multiple_of=cfg.get("pad_to_multiple_of"),
             padding_strategy=str(cfg.get("padding", "max_length")),
+            pack_sequences=bool(cfg.get("pack_sequences", False)),
+            shuffle_buffer_size=int(cfg.get("shuffle_buffer_size", 5000)),
         )
         return cls(config=data_config, tokenizer=tokenizer, extras=extras, seed=seed)
 
     def build_dataset(self) -> Dataset[Any]:
+        if self.extras.pack_sequences:
+            return PackedPretrainDataset(
+                sources=self.config.sources,
+                tokenizer=self.tokenizer,
+                sequence_length=self.extras.sequence_length,
+                shuffle_buffer_size=self.extras.shuffle_buffer_size,
+                seed=self.seed,
+            )
+        
         datasets: List[Dataset[Any]] = []
         for source in self.config.sources:
             if source.type == "local":
@@ -233,6 +330,19 @@ class PretrainDatasetModule(BaseDatasetModule):
         return _expand_datasets_with_weights(datasets, self.config.sources)
 
     def collate_fn(self, examples: Sequence[Mapping[str, Any]]) -> Mapping[str, Any]:
+        if self.extras.pack_sequences and examples and "input_ids" in examples[0]:
+            input_ids = torch.stack([ex["input_ids"] for ex in examples])
+            attention_mask = torch.ones_like(input_ids)
+            labels = input_ids.clone()
+            source_names = [ex.get("source", "packed") for ex in examples]
+            
+            return {
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+                "labels": labels,
+                "metadata": {"source": source_names},
+            }
+        
         texts = [str(ex["text"]) for ex in examples]
         source_names = [str(ex.get("source", "unknown")) for ex in examples]
 

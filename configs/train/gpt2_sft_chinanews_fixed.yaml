@@ -1,6 +1,14 @@
-# GPT-2 指令微调配置（ChinaNews 数据）
+# GPT-2 指令微调配置（ChinaNews 数据）- 修复版本
+# 
+# 修复内容：
+# 1. 降低学习率从2e-4到1e-4
+# 2. 修正scheduler的total_steps与实际训练步数匹配
+# 3. 增加更多数据量
+# 4. 增加训练epoch数
+# 5. 添加更频繁的评估
+# 6. 添加repetition_penalty
 
-run_name: "gpt2_sft_chinanews"
+run_name: "gpt2_sft_chinanews_fixed"
 seed: 1234
 
 trainer:
@@ -12,26 +20,26 @@ model:
 
 optimizer:
   name: "adamw"
-  lr: 2.0e-4
+  lr: 3.0e-5          # 再次降低学习率（应对数据重复pattern）
   betas: [0.9, 0.95]
-  weight_decay: 0.1
+  weight_decay: 0.15  # 增加weight decay
   eps: 1.0e-8
 
 scheduler:
   name: "cosine"
-  warmup_steps: 750
-  total_steps: 37500
-  min_lr: 1.0e-5
+  warmup_steps: 1000    # 增加warmup
+  total_steps: 50000    # 2 epochs × 25000 steps
+  min_lr: 1.0e-6
 
 training:
-  max_epochs: 1
+  max_epochs: 2         # 增加到2个epoch
   micro_batch_size: 2
   gradient_accumulation: 32
   max_grad_norm: 1.0
   use_amp: true
-  save_dir: "./checkpoints/gpt2_sft_chinanews"
+  save_dir: "./checkpoints/gpt2_sft_chinanews_fixed"
   log_interval: 10
-  eval_interval: 2000
+  eval_interval: 1000   # 更频繁的评估
 
 data:
   type: "local"
@@ -41,7 +49,7 @@ data:
   num_workers: 4
   prefetch_factor: 2
   shuffle: true
-  max_samples: 1200000
+  max_samples: 1600000  # 增加数据量
 
 evaluation:
   prompts:
