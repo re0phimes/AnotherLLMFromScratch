@@ -131,6 +131,15 @@ class BaseTrainer(ABC):
         self.use_amp = use_amp and 'cuda' in self.device
         self.log_interval = log_interval
         self.save_interval = save_interval
+        # 额外：按步保存间隔（可选）
+        self.save_steps: Optional[int] = kwargs.get('save_steps', None)
+        if isinstance(self.save_steps, int) and self.save_steps <= 0:
+            self.save_steps = None
+        # 训练最大步数（可选）
+        self.max_steps: Optional[int] = kwargs.get('max_steps', None)
+        if isinstance(self.max_steps, int) and self.max_steps <= 0:
+            self.max_steps = None
+        self._stop_training: bool = False
         
         self.save_dir = Path(save_dir)
         if self.is_main:
@@ -305,6 +314,16 @@ class BaseTrainer(ABC):
                 if (self.eval_interval is not None and 
                     self.global_step % self.eval_interval == 0):
                     self.generate_samples()
+
+                # 定期保存检查点（按步）
+                if self.is_main and self.save_steps is not None and self.save_steps > 0:
+                    if self.global_step % self.save_steps == 0:
+                        self.save_checkpoint(filename=f'checkpoint_step_{self.global_step}.pt')
+
+                # 达到最大训练步数则提前停止
+                if self.max_steps is not None and self.global_step >= self.max_steps:
+                    self._stop_training = True
+                    break
             
             total_loss += loss.item() * self.grad_accum_steps
             total_tokens += self._count_tokens(batch_prepared)
@@ -603,6 +622,11 @@ class BaseTrainer(ABC):
             
             # 训练
             train_stats = self.train_epoch()
+
+            if self._stop_training:
+                if self.is_main:
+                    print("已达到最大训练步数，提前停止训练。")
+                break
             
             if self.is_main:
                 print(f"\n训练统计:")

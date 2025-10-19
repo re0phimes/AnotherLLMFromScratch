@@ -304,9 +304,17 @@ def prepare_components(
     scheduler = create_scheduler(optimizer, scheduler_cfg, total_steps)
 
     use_amp = bool(training_cfg.get("use_amp", True)) and torch.cuda.is_available()
-    save_dir = Path(training_cfg.get("save_dir", "./checkpoints"))
+    # 兼容 output_dir/save_dir，两者其一即可
+    save_dir = Path(training_cfg.get("output_dir") or training_cfg.get("save_dir", "./checkpoints"))
     save_dir.mkdir(parents=True, exist_ok=True)
     log_interval = int(training_cfg.get("log_interval", 10))
+    
+    # 读取按步保存配置（可选）
+    save_steps_cfg = training_cfg.get("save_steps")
+    try:
+        save_steps_val: Optional[int] = int(save_steps_cfg) if save_steps_cfg is not None else None
+    except Exception:
+        save_steps_val = None
 
     return TrainingArtifacts(
         model=model,
@@ -372,6 +380,13 @@ def run_training(config_path: Path, args: argparse.Namespace) -> None:
         logger.info("启用生成评估: 每 {} 步生成样本", eval_interval)
         logger.info("评估 prompts 数量: {}", len(eval_prompts))
     
+    # 解析 save_steps（按步保存间隔）
+    save_steps_cfg = training_cfg.get("save_steps")
+    try:
+        save_steps_val: Optional[int] = int(save_steps_cfg) if save_steps_cfg is not None else None
+    except Exception:
+        save_steps_val = None
+    
     # 数据检查（仅在 rank 0 执行）
     if is_main_process() and args.inspect_data:
         from src.utils import inspect_first_batch
@@ -394,6 +409,8 @@ def run_training(config_path: Path, args: argparse.Namespace) -> None:
         save_dir=str(artifacts.save_dir),
         log_interval=artifacts.log_interval,
         estimated_steps_per_epoch=artifacts.steps_per_epoch,
+        save_steps=save_steps_val,
+        max_steps=int(training_cfg.get("max_steps")) if training_cfg.get("max_steps") is not None else None,
         # 生成评估参数
         tokenizer=artifacts.tokenizer,
         eval_interval=eval_interval,

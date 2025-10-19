@@ -23,28 +23,36 @@ data:
   add_eos: false                    # 由打包逻辑自动添加 EOS 作为分隔符
   padding: do_not_pad               # 打包模式下不需要 padding
 
+# 优化器（脚本读取顶层 optimizer）
+optimizer:
+  name: adamw
+  lr: 5.0e-5
+  weight_decay: 0.01
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+
+# 学习率调度器（脚本读取顶层 scheduler，仅支持 cosine）
+scheduler:
+  name: cosine
+  warmup_steps: 500
+  min_lr: 0.0
+
 training:
   output_dir: ./checkpoints/gpt2_pretrain_packed
   max_epochs: 1
   max_steps: 60000
+  save_steps: 10000
   
   # 批次配置（优化显存使用）
-  micro_batch_size: 4               # 每张卡的 batch size (降低以适应 24GB 显存)
-  gradient_accumulation: 8          # 梯度累积步数 (增加以保持有效 batch size)
+  micro_batch_size: 6               # 每张卡的 batch size (降低以适应 24GB 显存)
+  gradient_accumulation: 6          # 梯度累积步数 (增加以保持有效 batch size)
   # 有效 batch size = micro_batch_size × gradient_accumulation × num_gpus
-  # 例如: 4 × 8 × 1 = 32 (与原配置相同)
+  # 例如: 6 × 6 × 1 = 36 (与原配置相同)
   
-  # 优化器配置
-  learning_rate: 5.0e-5
-  weight_decay: 0.01
+  # 可选：梯度裁剪阈值（当前脚本未读取，仅保留作记录）
   max_grad_norm: 1.0
   
-  # 学习率调度
-  warmup_steps: 500
-  lr_scheduler_type: cosine
-  
-  # 保存和日志
-  save_steps: 1000
+  # 日志
   logging_steps: 10
   eval_interval: 200                # 每 200 步进行生成评估
   
@@ -59,11 +67,10 @@ training:
 evaluation:
   prompts:
     - "新华社北京"
-    - "据悉，"
-    - "记者从"
     - "中国经济正处于"
     - "在未来的科技创新领域"
-    - "china is one the age of "
+    - "X1哥是一个"
+    - "china is in the age of "
   max_new_tokens: 1024
   temperature: 0.8
   top_p: 0.9
