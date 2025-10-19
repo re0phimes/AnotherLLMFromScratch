@@ -1,0 +1,72 @@
+# GPT-2 预训练配置 - 修复版本
+# 修复了 packed sequence 的 attention mask 问题
+
+model:
+  model_config_path: configs/model/gpt_125m.yaml
+  tokenizer_name_or_path: Qwen/Qwen2.5-0.5B
+  use_flash_attention: false
+
+data:
+  data_sources:
+    - path: /home/modelenv/chentianxuan/projects/open_source_data_process/data/chinanews_pretrain.jsonl
+      type: local
+      name: chinanews_pretrain
+  
+  # ⚠️ 暂时禁用 packed sequences，直到修复 attention mask 问题
+  pack_sequences: false
+  
+  # ✅ 启用 BOS/EOS token，帮助模型学习序列边界
+  add_bos: true
+  add_eos: true
+  
+  # ✅ 使用 longest padding 策略，提高训练效率
+  padding: longest
+  
+  shuffle_buffer_size: 5000
+  sequence_length: 1024
+
+training:
+  output_dir: ./checkpoints/gpt2_pretrain_fixed
+  num_train_epochs: 3
+  
+  # 批次配置
+  micro_batch_size: 4               # 增加到 4，提高训练效率
+  gradient_accumulation: 8          # 减少到 8
+  # 有效 batch size = 4 × 8 = 32
+  
+  # 优化器配置
+  learning_rate: 3.0e-4             # 提高学习率，加快收敛
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  
+  # 学习率调度
+  warmup_steps: 500
+  lr_scheduler_type: cosine
+  
+  # 保存和日志
+  save_steps: 500                   # 更频繁地保存，便于监控
+  logging_steps: 10
+  eval_interval: 200                # 更频繁地评估
+  
+  # 混合精度训练
+  use_amp: true
+  
+  # 分布式配置
+  ddp: false
+  local_rank: -1
+
+# 生成评估配置
+evaluation:
+  prompts:
+    - "新华社北京"
+    - "据悉，"
+    - "记者从"
+    - "中国经济正处于"
+    - "在未来的科技创新领域"
+  max_new_tokens: 100
+  temperature: 0.9                  # 提高温度，增加多样性
+  top_p: 0.95                       # 提高 top_p
+  top_k: 50
+  repetition_penalty: 1.2           # 增加重复惩罚
+
+seed: 42

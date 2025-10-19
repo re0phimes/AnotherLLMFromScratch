@@ -11,6 +11,7 @@ def inspect_batch(
     tokenizer: Any,
     max_samples: int = 2,
     max_seq_display: int = 50,
+    doc_ids: Optional[torch.Tensor] = None,
 ) -> None:
     """检查并打印 batch 的详细信息。
     
@@ -124,6 +125,10 @@ def inspect_batch(
         sample_attention_mask = attention_mask[idx] if attention_mask is not None else None
         sample_labels = labels[idx] if labels is not None else None
         
+        sample_doc_ids = None
+        if doc_ids is not None:
+            sample_doc_ids = doc_ids[idx]
+
         # 首先显示完整的样本统计信息
         print(f"\n   📏 样本完整长度: {seq_len} tokens")
         
@@ -208,7 +213,18 @@ def inspect_batch(
         else:
             print(f"\n   D. ℹ️  Tokenizer 没有定义 EOS token")
         
-        # E. 解码文本（显示样本开头、中间、结尾）
+        # E. doc_id 变化位置
+        if sample_doc_ids is not None:
+            doc_ids_list = sample_doc_ids.tolist()
+            print(f"\n   E. doc_id 序列 (前 {display_len} 个):")
+            print(f"      {doc_ids_list[:display_len]}")
+            transitions = [i for i in range(1, len(doc_ids_list)) if doc_ids_list[i] != doc_ids_list[i-1]]
+            if transitions:
+                print(f"      🔀 文档切换位置: {transitions}")
+            else:
+                print("      🔁 未检测到文档切换（单文档 chunk）")
+
+        # F. 解码文本（显示样本开头、中间、结尾）
         print(f"\n   E. 解码后的文本:")
         try:
             # 1. 显示开头部分
@@ -243,7 +259,7 @@ def inspect_batch(
         except Exception as e:
             print(f"      ❌ 解码失败: {e}")
         
-        # F. 如果是打包数据，显示文档分隔的详细信息
+        # G. 如果是打包数据，显示文档分隔的详细信息
         if eos_token_id is not None and len(eos_positions) > 0:
             print(f"\n   F. 文档拼接验证:")
             print(f"      {'='*90}")
@@ -325,7 +341,12 @@ def inspect_batch(
     print("=" * 100 + "\n")
 
 
-def inspect_first_batch(dataloader, tokenizer, num_samples: int = 2) -> None:
+def inspect_first_batch(
+    dataloader,
+    tokenizer,
+    num_samples: int = 2,
+    doc_ids_key: str = "doc_ids",
+) -> None:
     """从 DataLoader 获取第一个 batch 并检查。
     
     Args:
@@ -337,7 +358,8 @@ def inspect_first_batch(dataloader, tokenizer, num_samples: int = 2) -> None:
     
     try:
         batch = next(iter(dataloader))
-        inspect_batch(batch, tokenizer, max_samples=num_samples)
+        doc_ids = batch.get(doc_ids_key)
+        inspect_batch(batch, tokenizer, max_samples=num_samples, doc_ids=doc_ids)
     except StopIteration:
         print("❌ DataLoader 为空，无法获取 batch")
     except Exception as e:

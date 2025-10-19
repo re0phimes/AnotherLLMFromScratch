@@ -25,7 +25,8 @@ data:
 
 training:
   output_dir: ./checkpoints/gpt2_pretrain_packed
-  num_train_epochs: 3
+  max_epochs: 1
+  max_steps: 60000
   
   # 批次配置（优化显存使用）
   micro_batch_size: 4               # 每张卡的 batch size (降低以适应 24GB 显存)
@@ -45,7 +46,7 @@ training:
   # 保存和日志
   save_steps: 1000
   logging_steps: 10
-  eval_interval: 500                # 每 500 步进行生成评估
+  eval_interval: 200                # 每 200 步进行生成评估
   
   # 混合精度训练
   use_amp: true
@@ -63,7 +64,7 @@ evaluation:
     - "中国经济正处于"
     - "在未来的科技创新领域"
     - "china is one the age of "
-  max_new_tokens: 100
+  max_new_tokens: 1024
   temperature: 0.8
   top_p: 0.9
   top_k: 50

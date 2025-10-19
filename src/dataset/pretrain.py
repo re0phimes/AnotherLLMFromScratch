@@ -201,7 +201,9 @@ class PackedPretrainDataset(IterableDataset):
         
         rng = random.Random(self.seed)
         token_buffer: Deque[int] = deque()
+        doc_buffer: Deque[int] = deque()
         shuffle_buffer: List[Dict[str, Any]] = []
+        doc_index = 0
         
         for source in self.sources:
             dataset: IterableDataset
@@ -223,14 +225,24 @@ class PackedPretrainDataset(IterableDataset):
                         tokens = self.tokenizer.encode(text, add_special_tokens=False)
                         tokens.append(self.eos_token_id)
                         token_buffer.extend(tokens)
+                        doc_buffer.extend([doc_index] * len(tokens))
+                        doc_index += 1
                     
                     shuffle_buffer.clear()
                     
                     while len(token_buffer) >= self.sequence_length:
-                        chunk = [token_buffer.popleft() for _ in range(self.sequence_length)]
+                        chunk_tokens = torch.tensor(
+                            [token_buffer.popleft() for _ in range(self.sequence_length)],
+                            dtype=torch.long,
+                        )
+                        chunk_doc_ids = torch.tensor(
+                            [doc_buffer.popleft() for _ in range(self.sequence_length)],
+                            dtype=torch.long,
+                        )
                         yield {
-                            "input_ids": torch.tensor(chunk, dtype=torch.long),
-                            "source": "packed"
+                            "input_ids": chunk_tokens,
+                            "doc_ids": chunk_doc_ids,
+                            "source": "packed",
                         }
         
         if shuffle_buffer:
@@ -240,13 +252,23 @@ class PackedPretrainDataset(IterableDataset):
                 tokens = self.tokenizer.encode(text, add_special_tokens=False)
                 tokens.append(self.eos_token_id)
                 token_buffer.extend(tokens)
+                doc_buffer.extend([doc_index] * len(tokens))
+                doc_index += 1
             shuffle_buffer.clear()
-        
+
         while len(token_buffer) >= self.sequence_length:
-            chunk = [token_buffer.popleft() for _ in range(self.sequence_length)]
+            chunk_tokens = torch.tensor(
+                [token_buffer.popleft() for _ in range(self.sequence_length)],
+                dtype=torch.long,
+            )
+            chunk_doc_ids = torch.tensor(
+                [doc_buffer.popleft() for _ in range(self.sequence_length)],
+                dtype=torch.long,
+            )
             yield {
-                "input_ids": torch.tensor(chunk, dtype=torch.long),
-                "source": "packed"
+                "input_ids": chunk_tokens,
+                "doc_ids": chunk_doc_ids,
+                "source": "packed",
             }
 
 
@@ -332,13 +354,34 @@ class PretrainDatasetModule(BaseDatasetModule):
     def collate_fn(self, examples: Sequence[Mapping[str, Any]]) -> Mapping[str, Any]:
         if self.extras.pack_sequences and examples and "input_ids" in examples[0]:
             input_ids = torch.stack([ex["input_ids"] for ex in examples])
-            attention_mask = torch.ones_like(input_ids)
+            doc_ids = torch.stack([ex["doc_ids"] for ex in examples])
+            seq_len = input_ids.size(1)
+
+            device = input_ids.device
+            causal_mask = torch.tril(torch.ones((seq_len, seq_len), dtype=torch.bool, device=device))
+            same_doc = doc_ids[:, :, None] == doc_ids[:, None, :]
+            attention_mask = (causal_mask.unsqueeze(0) & same_doc).to(dtype=torch.bool)
+            # Avoid expanded views (overlapping storage) which break pin_memory
+            position_ids = (
+                torch.arange(seq_len, device=device)
+                .unsqueeze(0)
+                .repeat(input_ids.size(0), 1)
+                .contiguous()
+            )
             labels = input_ids.clone()
+            
+            # ✅ 修复：在 EOS token 位置不计算 loss，避免学习错误的跨文档模式
+            # 这样模型不会过度学习 "文档A的EOS -> 文档B的开始" 这种虚假依赖
+            if self.tokenizer.eos_token_id is not None:
+                eos_mask = (input_ids == self.tokenizer.eos_token_id)
+                labels[eos_mask] = -100
+            
             source_names = [ex.get("source", "packed") for ex in examples]
             
             return {
                 "input_ids": input_ids,
                 "attention_mask": attention_mask,
+                "position_ids": position_ids,
                 "labels": labels,
                 "metadata": {"source": source_names},
             }

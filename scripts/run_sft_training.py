@@ -330,10 +330,18 @@ def run_training(config_path: Path, args: argparse.Namespace) -> None:
     config = load_yaml_config(config_path)
     rank, local_rank, world_size = setup_distributed()
 
-    log_dir = Path(config.get("training", {}).get("save_dir", "./checkpoints")) / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    logs_root = Path("logs")
+    date_dir = logs_root / datetime.now().strftime("%Y%m%d")
+    date_dir.mkdir(parents=True, exist_ok=True)
+    run_index = sum(
+        1 for entry in date_dir.iterdir() if entry.is_dir() and entry.name.startswith("run_")
+    ) + 1
+    log_dir = date_dir / f"run_{run_index:02d}"
+    log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / f"{config.get('run_name', 'train')}_{timestamp}.log"
+    if is_main_process():
+        logger.info("日志目录: {}", log_dir)
     setup_logger(str(log_file), rank=rank, world_size=world_size)
 
     logger.info("加载配置完成: {}", config_path)

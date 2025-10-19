@@ -102,7 +102,9 @@ class LearnedAbsoluteEmbedding(nn.Module):
     ) -> torch.Tensor:
         if attention_mask is None:
             return self._position_ids[:, : input_ids.size(1)].repeat(input_ids.size(0), 1)
-
+        # Accept 3D masks (B, T, T) by using their diagonal as per-token validity
+        if attention_mask.dim() == 3:
+            attention_mask = torch.diagonal(attention_mask, dim1=-2, dim2=-1)
         if attention_mask.shape != input_ids.shape:
             raise ValueError("attention_mask must have the same shape as input_ids.")
 

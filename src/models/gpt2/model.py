@@ -211,10 +211,17 @@ class GPT2Model(nn.Module):
         Returns:
             GPT2ModelOutput: 包含 logits、loss(如果 labels 提供)、隐藏状态和注意力权重
         """
+        # For embeddings position id creation we require a (B, T) mask to indicate valid tokens
+        # If a higher-rank mask is provided (e.g., packed mode (B, T, T)), derive a per-token mask
+        # from its diagonal; if None, embeddings will fallback to simple arange.
+        emb_attention_mask: Optional[torch.Tensor] = attention_mask
+        if attention_mask is not None and attention_mask.dim() == 3:
+            # shape: (B, T, T) -> take diagonal over last two dims -> (B, T)
+            emb_attention_mask = torch.diagonal(attention_mask, dim1=-2, dim2=-1)
         hidden_states = self.embeddings(
             input_ids,
             position_ids=position_ids,
-            attention_mask=attention_mask,
+            attention_mask=emb_attention_mask,
         )
 
         all_hidden_states = [] if self.output_hidden_states else None
