@@ -47,6 +47,7 @@ from utils.distributed import (
     cleanup_distributed,
     get_device
 )
+from utils.logger import logger
 
 
 class BaseTrainer(ABC):
@@ -174,28 +175,28 @@ class BaseTrainer(ABC):
     
     def _print_config(self):
         """打印训练配置（仅主进程）"""
-        print(f"\n{'='*70}")
-        print(f"{self.__class__.__name__} 配置")
-        print(f"{'='*70}")
-        print(f"分布式训练: {self.is_distributed}")
+        logger.info("\n{}", "="*70)
+        logger.info("{} 配置", self.__class__.__name__)
+        logger.info("{}", "="*70)
+        logger.info("分布式训练: {}", self.is_distributed)
         if self.is_distributed:
-            print(f"Rank: {self.rank}/{self.world_size}")
-            print(f"Local Rank: {self.local_rank}")
-            print(f"DDP启用: {self.use_ddp}")
-        print(f"设备: {self.device}")
-        print(f"最大轮数: {self.max_epochs}")
-        print(f"梯度累积: {self.grad_accum_steps}")
-        print(f"梯度裁剪: {self.max_grad_norm}")
-        print(f"混合精度: {self.use_amp}")
-        print(f"学习率调度器: {type(self.scheduler).__name__ if self.scheduler else 'None'}")
+            logger.info("Rank: {}/{}", self.rank, self.world_size)
+            logger.info("Local Rank: {}", self.local_rank)
+            logger.info("DDP启用: {}", self.use_ddp)
+        logger.info("设备: {}", self.device)
+        logger.info("最大轮数: {}", self.max_epochs)
+        logger.info("梯度累积: {}", self.grad_accum_steps)
+        logger.info("梯度裁剪: {}", self.max_grad_norm)
+        logger.info("混合精度: {}", self.use_amp)
+        logger.info("学习率调度器: {}", type(self.scheduler).__name__ if self.scheduler else 'None')
         
         # 子类可以添加额外的配置信息
         extra_info = self._get_extra_config_info()
         if extra_info:
             for key, value in extra_info.items():
-                print(f"{key}: {value}")
+                logger.info("{}: {}", key, value)
         
-        print(f"{'='*70}\n")
+        logger.info("{}\n", "="*70)
     
     def _get_extra_config_info(self) -> Dict[str, Any]:
         """子类可以重写此方法来添加额外的配置信息"""
@@ -264,6 +265,7 @@ class BaseTrainer(ABC):
         except TypeError:
             self._epoch_total_batches = None
         
+        processed_batches = 0
         for batch_idx, batch in enumerate(self.train_loader):
             # 准备数据（子类实现）
             batch_prepared = self._prepare_batch(batch)
@@ -327,8 +329,14 @@ class BaseTrainer(ABC):
             
             total_loss += loss.item() * self.grad_accum_steps
             total_tokens += self._count_tokens(batch_prepared)
+            processed_batches += 1
         
-        avg_loss = total_loss / len(self.train_loader)
+        # 对 IterableDataset 兼容：无法获取 len(self.train_loader) 时，使用已处理批次数
+        if self._epoch_total_batches is not None and self._epoch_total_batches > 0:
+            denom = self._epoch_total_batches
+        else:
+            denom = max(processed_batches, 1)
+        avg_loss = total_loss / denom
         elapsed = time.time() - start_time
         
         # 分布式训练：同步损失和 token 数
@@ -357,6 +365,7 @@ class BaseTrainer(ABC):
         
         total_loss = 0.0
         total_tokens = 0
+        processed_batches = 0
         
         for batch in self.val_loader:
             batch_prepared = self._prepare_batch(batch)
@@ -367,8 +376,18 @@ class BaseTrainer(ABC):
             
             total_loss += loss.item()
             total_tokens += self._count_tokens(batch_prepared)
+            processed_batches += 1
         
-        avg_loss = total_loss / len(self.val_loader)
+        # 对 IterableDataset 兼容
+        try:
+            total_batches = len(self.val_loader)
+        except TypeError:
+            total_batches = None
+        if total_batches is not None and total_batches > 0:
+            denom = total_batches
+        else:
+            denom = max(processed_batches, 1)
+        avg_loss = total_loss / denom
         
         # 分布式训练：同步验证损失
         if self.is_distributed:
@@ -403,14 +422,14 @@ class BaseTrainer(ABC):
         
         # 检查模型是否有 generate 方法
         if not hasattr(model, 'generate'):
-            print("\n警告: 模型没有 generate 方法，跳过生成评估")
+            logger.warning("警告: 模型没有 generate 方法，跳过生成评估")
             return
         
         model.eval()
         
-        print(f"\n{'='*70}")
-        print(f"生成样本 (Step {self.global_step})")
-        print(f"{'='*70}")
+        logger.info("\n{}", "="*70)
+        logger.info("生成样本 (Step {})", self.global_step)
+        logger.info("{}", "="*70)
         
         for idx, prompt in enumerate(self.eval_prompts, 1):
             try:
@@ -438,15 +457,15 @@ class BaseTrainer(ABC):
                     skip_special_tokens=True
                 )
                 
-                print(f"\n[Prompt {idx}]: {prompt}")
-                print(f"[Generated]: {generated_text}")
-                print("-" * 70)
+                logger.info("\n[Prompt {}]: {}", idx, prompt)
+                logger.info("[Generated]: {}", generated_text)
+                logger.info("{}", "-" * 70)
                 
             except Exception as e:
-                print(f"\n生成失败 (Prompt {idx}): {e}")
-                print("-" * 70)
+                logger.error("生成失败 (Prompt {}): {}", idx, e)
+                logger.info("{}", "-" * 70)
         
-        print()
+        logger.info("")
         model.train()
     
     def _count_tokens(self, batch: Dict[str, Any]) -> int:
@@ -523,7 +542,7 @@ class BaseTrainer(ABC):
         if extra_log:
             log_str += " | " + extra_log
         
-        print(log_str)
+        logger.info(log_str)
     
     def _get_extra_log_info(self, batch: Dict[str, Any]) -> str:
         """子类可以重写此方法来添加额外的日志信息"""
@@ -562,13 +581,13 @@ class BaseTrainer(ABC):
         
         checkpoint_path = self.save_dir / filename
         torch.save(checkpoint, checkpoint_path)
-        print(f"检查点已保存: {checkpoint_path}")
+        logger.info("检查点已保存: {}", checkpoint_path)
         
         # 保存最佳模型
         if is_best:
             best_path = self.save_dir / 'best_model.pt'
             torch.save(checkpoint, best_path)
-            print(f"最佳模型已保存: {best_path}")
+            logger.info("最佳模型已保存: {}", best_path)
     
     def load_checkpoint(self, checkpoint_path: str):
         """加载检查点"""
@@ -594,8 +613,8 @@ class BaseTrainer(ABC):
             self._load_extra_checkpoint_state(checkpoint['extra_state'])
         
         if self.is_main:
-            print(f"检查点已加载: {checkpoint_path}")
-            print(f"恢复到 Epoch {self.current_epoch}, Step {self.global_step}")
+            logger.info("检查点已加载: {}", checkpoint_path)
+            logger.info("恢复到 Epoch {}, Step {}", self.current_epoch, self.global_step)
     
     def _get_extra_checkpoint_state(self) -> Optional[Dict[str, Any]]:
         """子类可以重写此方法来保存额外的状态"""
@@ -608,47 +627,47 @@ class BaseTrainer(ABC):
     def train(self):
         """完整训练流程"""
         if self.is_main:
-            print(f"\n{'='*70}")
-            print(f"开始训练 - {self.__class__.__name__}")
-            print(f"{'='*70}\n")
+            logger.info("\n{}", "="*70)
+            logger.info("开始训练 - {}", self.__class__.__name__)
+            logger.info("{}\n", "="*70)
         
         for epoch in range(self.current_epoch, self.max_epochs):
             self.current_epoch = epoch
             
             if self.is_main:
-                print(f"\n{'='*70}")
-                print(f"Epoch {epoch + 1}/{self.max_epochs}")
-                print(f"{'='*70}\n")
+                logger.info("\n{}", "="*70)
+                logger.info("Epoch {}/{}", epoch + 1, self.max_epochs)
+                logger.info("{}\n", "="*70)
             
             # 训练
             train_stats = self.train_epoch()
 
             if self._stop_training:
                 if self.is_main:
-                    print("已达到最大训练步数，提前停止训练。")
+                    logger.info("已达到最大训练步数，提前停止训练。")
                 break
             
             if self.is_main:
-                print(f"\n训练统计:")
-                print(f"  平均损失: {train_stats['loss']:.4f}")
-                print(f"  困惑度: {train_stats['ppl']:.2f}")
-                print(f"  耗时: {train_stats['time']:.2f}s")
-                print(f"  吞吐量: {train_stats['tokens_per_sec']:.0f} tokens/s")
+                logger.info("\n训练统计:")
+                logger.info("  平均损失: {:.4f}", train_stats['loss'])
+                logger.info("  困惑度: {:.2f}", train_stats['ppl'])
+                logger.info("  耗时: {:.2f}s", train_stats['time'])
+                logger.info("  吞吐量: {:.0f} tokens/s", train_stats['tokens_per_sec'])
             
             # 验证
             if self.val_loader is not None:
                 val_stats = self.validate()
                 
                 if self.is_main:
-                    print(f"\n验证统计:")
-                    print(f"  验证损失: {val_stats['loss']:.4f}")
-                    print(f"  困惑度: {val_stats['ppl']:.2f}")
+                    logger.info("\n验证统计:")
+                    logger.info("  验证损失: {:.4f}", val_stats['loss'])
+                    logger.info("  困惑度: {:.2f}", val_stats['ppl'])
                 
                 is_best = val_stats['loss'] < self.best_val_loss
                 if is_best:
                     self.best_val_loss = val_stats['loss']
                     if self.is_main:
-                        print(f"  ✓ 新的最佳验证损失！")
+                        logger.info("  ✓ 新的最佳验证损失！")
             else:
                 is_best = False
             
@@ -657,8 +676,8 @@ class BaseTrainer(ABC):
                 self.save_checkpoint(is_best=is_best)
         
         if self.is_main:
-            print(f"\n{'='*70}")
-            print("训练完成！")
-            print(f"最佳验证损失: {self.best_val_loss:.4f}")
-            print(f"{'='*70}\n")
+            logger.info("\n{}", "="*70)
+            logger.info("训练完成！")
+            logger.info("最佳验证损失: {:.4f}", self.best_val_loss)
+            logger.info("{}\n", "="*70)
 

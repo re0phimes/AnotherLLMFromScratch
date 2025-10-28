@@ -191,7 +191,8 @@ def print_trainer_info():
 ║                                                                   ║
 ╚═══════════════════════════════════════════════════════════════════╝
 """
-    print(info)
+    from src.utils import logger
+    logger.info(info)
 
 
 if __name__ == "__main__":

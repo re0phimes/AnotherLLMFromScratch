@@ -85,11 +85,12 @@ class GRPOTrainer(BaseTrainer):
         
         # 警告：GRPO 需要额外实现
         if self.is_main:
-            print("\n⚠️  警告：GRPO 训练器需要自定义采样和奖励逻辑！")
-            print("请根据具体任务实现以下方法：")
-            print("  - _sample_responses(): 在线采样回答")
-            print("  - _compute_rewards(): 计算奖励分数")
-            print("  - _compute_old_logprobs(): 计算旧策略的 log 概率\n")
+            from src.utils import logger
+            logger.warning("⚠️  警告：GRPO 训练器需要自定义采样和奖励逻辑！")
+            logger.warning("请根据具体任务实现以下方法：")
+            logger.warning("  - _sample_responses(): 在线采样回答")
+            logger.warning("  - _compute_rewards(): 计算奖励分数")
+            logger.warning("  - _compute_old_logprobs(): 计算旧策略的 log 概率\n")
     
     def _prepare_batch(self, batch: Dict[str, Any]) -> Dict[str, Any]:
         """
